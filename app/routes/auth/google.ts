@@ -28,7 +28,6 @@ export default createRoute(
     let userId: string;
     if (existing) {
       userId = existing.id;
-      // Update name/avatar
       await db
         .update(users)
         .set({
@@ -47,7 +46,6 @@ export default createRoute(
       });
     }
 
-    // Set session cookie
     await setSession(c, {
       id: userId,
       email: googleUser.email,

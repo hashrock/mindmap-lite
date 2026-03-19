@@ -60,10 +60,11 @@ async function verify(
 export async function setSession(c: Context, user: SessionUser) {
   const payload = btoa(JSON.stringify(user));
   const token = await sign(payload, c.env.SESSION_SECRET);
+  const isLocalhost = new URL(c.req.url).hostname === "localhost";
   setCookie(c, SESSION_COOKIE, token, {
     path: "/",
     httpOnly: true,
-    secure: true,
+    secure: !isLocalhost,
     sameSite: "Lax",
     maxAge: 60 * 60 * 24 * 30, // 30 days
   });
