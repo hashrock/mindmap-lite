@@ -12,8 +12,23 @@ const DEMO_TEXT = `Mindmap Lite
     テキストベース
     シンプル`;
 
-export default function MindmapEditor() {
-  const [text, setText] = useState(DEMO_TEXT);
+interface Props {
+  noteId?: string;
+  initialContent?: string;
+  initialTitle?: string;
+  initialIsPublic?: boolean;
+}
+
+export default function MindmapEditor({
+  noteId,
+  initialContent,
+  initialTitle,
+  initialIsPublic,
+}: Props) {
+  const [text, setText] = useState(initialContent || DEMO_TEXT);
+  const [title, setTitle] = useState(initialTitle || "");
+  const [isPublic, setIsPublic] = useState(initialIsPublic || false);
+  const [saveStatus, setSaveStatus] = useState("");
   const [nodes, setNodes] = useState<MindMapNode[]>([]);
   const [selectionState, setSelectionState] = useState<SelectionState>({
     cursorPos: 0,
@@ -24,6 +39,46 @@ export default function MindmapEditor() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const konvaStageRef = useRef<any>(null);
+  const saveTimerRef = useRef<any>(null);
+
+  // Auto-save for logged-in notes
+  const saveNote = useCallback(
+    async (content: string, noteTitle?: string, pub?: boolean) => {
+      if (!noteId) return;
+      setSaveStatus("保存中...");
+      try {
+        const res = await fetch(`/api/notes/${noteId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content,
+            title: noteTitle ?? title,
+            isPublic: pub ?? isPublic,
+          }),
+        });
+        if (res.ok) {
+          setSaveStatus("保存済み");
+        } else {
+          setSaveStatus("保存失敗");
+        }
+      } catch {
+        setSaveStatus("保存失敗");
+      }
+    },
+    [noteId, title, isPublic]
+  );
+
+  // Debounced auto-save on text change
+  useEffect(() => {
+    if (!noteId) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveNote(text);
+    }, 1500);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [text, noteId, saveNote]);
 
   // Parse text to nodes
   useEffect(() => {
@@ -35,12 +90,10 @@ export default function MindmapEditor() {
   useEffect(() => {
     if (!canvasRef.current || nodes.length === 0) return;
 
-    // Dynamic import Konva to avoid SSR issues
     import("konva").then((KonvaModule) => {
       const Konva = KonvaModule.default;
       const container = canvasRef.current!;
 
-      // Destroy previous stage
       if (konvaStageRef.current) {
         konvaStageRef.current.destroy();
       }
@@ -56,11 +109,9 @@ export default function MindmapEditor() {
       const layer = new Konva.Layer();
       stage.add(layer);
 
-      // Create node map
       const nodeMap: Record<string, MindMapNode> = {};
       nodes.forEach((n) => (nodeMap[n.id] = n));
 
-      // Measure text widths
       const textWidths = new Map<string, number>();
       nodes.forEach((node) => {
         const displayText = node.text === "" ? "empty" : node.text;
@@ -73,18 +124,16 @@ export default function MindmapEditor() {
         textWidths.set(node.id, t.width());
       });
 
-      // Draw connections (bezier curves)
+      // Draw connections
       nodes.forEach((node) => {
         node.children.forEach((childId) => {
           const child = nodeMap[childId];
           if (!child) return;
-
           const parentWidth = textWidths.get(node.id) || 100;
           const startX = node.x + parentWidth + 40;
           const startY = node.y;
           const endX = child.x;
           const endY = child.y;
-
           const controlOffset = Math.abs(endX - startX) * 0.5;
           const path = new Konva.Path({
             data: `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`,
@@ -109,7 +158,6 @@ export default function MindmapEditor() {
 
         const group = new Konva.Group();
 
-        // Background rect
         const rect = new Konva.Rect({
           x: node.x,
           y: node.y - rectHeight / 2,
@@ -130,7 +178,6 @@ export default function MindmapEditor() {
         });
         group.add(rect);
 
-        // Text
         const text = new Konva.Text({
           x: node.x + padding,
           y: node.y - 7,
@@ -143,7 +190,6 @@ export default function MindmapEditor() {
         });
         group.add(text);
 
-        // Click handler
         group.on("click tap", () => {
           const textarea = textareaRef.current;
           if (textarea) {
@@ -165,27 +211,22 @@ export default function MindmapEditor() {
         const oldScale = stage.scaleX();
         const pointer = stage.getPointerPosition();
         if (!pointer) return;
-
         const mousePointTo = {
           x: (pointer.x - stage.x()) / oldScale,
           y: (pointer.y - stage.y()) / oldScale,
         };
-
         const scaleBy = 1.05;
         const newScale =
           e.evt.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
         const limitedScale = Math.max(0.2, Math.min(3, newScale));
-
         stage.scale({ x: limitedScale, y: limitedScale });
-        const newPos = {
+        stage.position({
           x: pointer.x - mousePointTo.x * limitedScale,
           y: pointer.y - mousePointTo.y * limitedScale,
-        };
-        stage.position(newPos);
+        });
         layer.draw();
       });
 
-      // Handle resize
       const resizeObserver = new ResizeObserver(() => {
         stage.width(container.clientWidth);
         stage.height(container.clientHeight);
@@ -193,9 +234,7 @@ export default function MindmapEditor() {
       });
       resizeObserver.observe(container);
 
-      return () => {
-        resizeObserver.disconnect();
-      };
+      return () => resizeObserver.disconnect();
     });
   }, [nodes, selectionState.activeNodeId]);
 
@@ -203,10 +242,8 @@ export default function MindmapEditor() {
   const updateSelection = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-
     const cursorPos = textarea.selectionStart;
     const activeNode = findNodeAtPosition(nodes, cursorPos);
-
     setSelectionState({
       cursorPos,
       selectionStart: textarea.selectionStart,
@@ -227,7 +264,6 @@ export default function MindmapEditor() {
     const textarea = e.currentTarget as HTMLTextAreaElement;
     const { selectionStart, selectionEnd } = textarea;
 
-    // Enter: auto-indent
     if (e.key === "Enter" && !e.nativeEvent?.isComposing) {
       e.preventDefault();
       const lines = text.split("\n");
@@ -257,7 +293,6 @@ export default function MindmapEditor() {
       return;
     }
 
-    // Tab: indent/outdent
     if (e.key === "Tab") {
       e.preventDefault();
       const lines = text.split("\n");
@@ -272,7 +307,6 @@ export default function MindmapEditor() {
       }
 
       if (e.shiftKey) {
-        // Outdent
         if (lines[lineIndex].startsWith("  ")) {
           lines[lineIndex] = lines[lineIndex].substring(2);
           const newText = lines.join("\n");
@@ -283,7 +317,6 @@ export default function MindmapEditor() {
           }, 0);
         }
       } else {
-        // Indent
         lines[lineIndex] = "  " + lines[lineIndex];
         const newText = lines.join("\n");
         setText(newText);
@@ -298,6 +331,33 @@ export default function MindmapEditor() {
   return (
     <div class="flex h-full">
       <div class="w-1/3 border-r flex flex-col">
+        {noteId && (
+          <div class="flex items-center gap-2 px-4 py-2 border-b bg-gray-50">
+            <input
+              type="text"
+              value={title}
+              onInput={(e: any) => setTitle(e.currentTarget.value)}
+              onBlur={() => saveNote(text)}
+              class="flex-1 text-sm px-2 py-1 border rounded"
+              placeholder="タイトル"
+            />
+            <label class="flex items-center gap-1 text-xs whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={isPublic}
+                onChange={(e: any) => {
+                  const newVal = e.currentTarget.checked;
+                  setIsPublic(newVal);
+                  saveNote(text, undefined, newVal);
+                }}
+              />
+              公開
+            </label>
+            <span class="text-xs text-gray-400 whitespace-nowrap">
+              {saveStatus}
+            </span>
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={text}

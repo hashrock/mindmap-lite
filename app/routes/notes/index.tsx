@@ -1,11 +1,13 @@
 import { createRoute } from "honox/factory";
 import { drizzle } from "drizzle-orm/d1";
 import { notes, users } from "../../db/schema";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, and } from "drizzle-orm";
 
 export default createRoute(async (c) => {
   const db = drizzle(c.env.DB);
-  const allNotes = await db
+  const user = c.get("user");
+
+  const publicNotes = await db
     .select({
       id: notes.id,
       title: notes.title,
@@ -19,25 +21,99 @@ export default createRoute(async (c) => {
     .where(eq(notes.isPublic, true))
     .orderBy(desc(notes.updatedAt));
 
+  // Get user's own notes if logged in
+  const myNotes = user
+    ? await db
+        .select()
+        .from(notes)
+        .where(eq(notes.userId, user.id))
+        .orderBy(desc(notes.updatedAt))
+    : [];
+
   return c.render(
     <div class="max-w-4xl mx-auto px-4 py-8">
       <header class="flex items-center justify-between mb-8">
         <h1 class="text-2xl font-bold">Mindmap Lite</h1>
-        <a
-          href="/guest"
-          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-        >
-          ゲストで試す
-        </a>
+        <div class="flex items-center gap-3">
+          <a
+            href="/guest"
+            class="px-4 py-2 text-sm border rounded-lg hover:bg-gray-100 transition"
+          >
+            ゲストで試す
+          </a>
+          {user ? (
+            <div class="flex items-center gap-3">
+              {user.avatarUrl && (
+                <img
+                  src={user.avatarUrl}
+                  alt=""
+                  class="w-8 h-8 rounded-full"
+                />
+              )}
+              <span class="text-sm">{user.name}</span>
+              <a
+                href="/auth/logout"
+                class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900"
+              >
+                ログアウト
+              </a>
+            </div>
+          ) : (
+            <a
+              href="/auth/google"
+              class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+            >
+              Googleでログイン
+            </a>
+          )}
+        </div>
       </header>
+
+      {user && (
+        <section class="mb-8">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold">マイノート</h2>
+            <a
+              href="/notes/new"
+              class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+            >
+              + 新規作成
+            </a>
+          </div>
+          {myNotes.length === 0 ? (
+            <p class="text-gray-500">ノートがありません。</p>
+          ) : (
+            <div class="grid gap-3">
+              {myNotes.map((note) => (
+                <a
+                  href={`/notes/${note.id}/edit`}
+                  class="block p-4 bg-white rounded-lg border hover:border-blue-400 transition"
+                >
+                  <div class="flex items-center justify-between">
+                    <h3 class="font-medium">{note.title}</h3>
+                    <span
+                      class={`text-xs px-2 py-0.5 rounded ${note.isPublic ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}
+                    >
+                      {note.isPublic ? "公開" : "非公開"}
+                    </span>
+                  </div>
+                  <div class="text-sm text-gray-500 mt-1">
+                    {new Date(note.updatedAt).toLocaleDateString("ja-JP")}
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section>
         <h2 class="text-lg font-semibold mb-4">公開ノート</h2>
-        {allNotes.length === 0 ? (
-          <p class="text-gray-500">まだノートがありません。</p>
+        {publicNotes.length === 0 ? (
+          <p class="text-gray-500">まだ公開ノートがありません。</p>
         ) : (
-          <div class="grid gap-4">
-            {allNotes.map((note) => (
+          <div class="grid gap-3">
+            {publicNotes.map((note) => (
               <a
                 href={`/notes/${note.id}`}
                 class="block p-4 bg-white rounded-lg border hover:border-blue-400 transition"

@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@hono/oauth-providers':
+        specifier: ^0.8.5
+        version: 0.8.5(hono@4.12.8)
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.1(@cloudflare/workers-types@4.20260317.1)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.8.0)
@@ -613,6 +616,12 @@ packages:
     engines: {node: '>=18.14.1'}
     peerDependencies:
       hono: ^4
+
+  '@hono/oauth-providers@0.8.5':
+    resolution: {integrity: sha512-hgEDH/gUmB/opman9jvT8dLItZsSC9M9yFiaam0b6InK7WQkdzIcaRAkdda47QpixnK9S1Ah2vjDB2U16LkMnA==}
+    engines: {node: '>=18.4.0'}
+    peerDependencies:
+      hono: '>=3.0.0'
 
   '@hono/vite-build@1.10.1':
     resolution: {integrity: sha512-1HRZj0pTDAvlFpZAyiiplOAhzd9P8NLDATOTu4ic+LdYAImLxWMMWV6LAB19gg7c2C+dQlE7sMKcpylJ+buRug==}
@@ -2127,6 +2136,10 @@ snapshots:
     optional: true
 
   '@hono/node-server@1.19.11(hono@4.12.8)':
+    dependencies:
+      hono: 4.12.8
+
+  '@hono/oauth-providers@0.8.5(hono@4.12.8)':
     dependencies:
       hono: 4.12.8
 

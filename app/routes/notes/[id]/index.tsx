@@ -1,8 +1,8 @@
 import { createRoute } from "honox/factory";
 import { drizzle } from "drizzle-orm/d1";
-import { notes } from "../../db/schema";
+import { notes } from "../../../db/schema";
 import { eq } from "drizzle-orm";
-import MindmapViewer from "../../islands/mindmap-viewer";
+import MindmapViewer from "../../../islands/mindmap-viewer";
 
 export default createRoute(async (c) => {
   const id = c.req.param("id");
