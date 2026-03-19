@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "hono/jsx";
-import { parseTextToNodes, findNodeAtPosition } from "../utils/mindmapParser";
+import { parseTextToNodes } from "../utils/mindmapParser";
 import type { MindMapNode, SelectionState } from "../types/MindMap";
 
 const DEMO_TEXT = `使い方
@@ -200,12 +200,18 @@ export default function MindmapEditor({
 
         group.on("click tap", () => {
           const textarea = textareaRef.current;
-          if (textarea) {
-            textarea.focus();
-            const pos = node.startPos;
-            textarea.setSelectionRange(pos, pos);
-            updateSelection();
+          if (!textarea) return;
+          // lineNumber 0 = title (not in textarea), 1+ = textarea lines
+          if (node.lineNumber === 0) return;
+          textarea.focus();
+          const textareaLineIndex = node.lineNumber - 1;
+          const lines = textarea.value.split("\n");
+          let pos = 0;
+          for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
+            pos += lines[i].length + 1;
           }
+          textarea.setSelectionRange(pos, pos);
+          updateSelection();
         });
 
         layer.add(group);
@@ -246,12 +252,16 @@ export default function MindmapEditor({
     });
   }, [nodes, selectionState.activeNodeId]);
 
-  // Selection sync
+  // Selection sync: textarea line → mindmap line (offset +1 for title)
   const updateSelection = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const cursorPos = textarea.selectionStart;
-    const activeNode = findNodeAtPosition(nodes, cursorPos);
+    const beforeCursor = textarea.value.substring(0, cursorPos);
+    const textareaLine = beforeCursor.split("\n").length - 1;
+    const mindmapLine = textareaLine + 1; // +1 because title is line 0
+    const activeNode =
+      nodes.find((n) => n.lineNumber === mindmapLine) || null;
     setSelectionState({
       cursorPos,
       selectionStart: textarea.selectionStart,
