@@ -9,6 +9,7 @@ import { setSession } from "../../utils/session";
 export default createRoute(
   googleAuth({
     scope: ["openid", "email", "profile"],
+    prompt: "select_account",
   }),
   async (c) => {
     const googleUser = c.get("user-google");
