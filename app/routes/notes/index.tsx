@@ -85,22 +85,38 @@ export default createRoute(async (c) => {
           ) : (
             <div class="grid gap-3">
               {myNotes.map((note) => (
-                <a
-                  href={`/notes/${note.id}/edit`}
-                  class="block p-4 bg-white rounded-lg border hover:border-blue-400 transition"
-                >
-                  <div class="flex items-center justify-between">
-                    <h3 class="font-medium">{note.title}</h3>
-                    <span
-                      class={`text-xs px-2 py-0.5 rounded ${note.isPublic ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}
+                <div class="flex items-center gap-2 bg-white rounded-lg border hover:border-blue-400 transition">
+                  <a
+                    href={`/notes/${note.id}/edit`}
+                    class="flex-1 p-4"
+                  >
+                    <div class="flex items-center justify-between">
+                      <h3 class="font-medium">{note.title}</h3>
+                      <span
+                        class={`text-xs px-2 py-0.5 rounded ${note.isPublic ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}
+                      >
+                        {note.isPublic ? "公開" : "非公開"}
+                      </span>
+                    </div>
+                    <div class="text-sm text-gray-500 mt-1">
+                      {new Date(note.updatedAt).toLocaleDateString("ja-JP")}
+                    </div>
+                  </a>
+                  <form
+                    method="POST"
+                    action={`/notes/${note.id}/delete`}
+                    class="pr-3"
+                    onsubmit="return confirm('このノートを削除しますか？')"
+                  >
+                    <button
+                      type="submit"
+                      class="p-2 text-gray-400 hover:text-red-500 transition"
+                      title="削除"
                     >
-                      {note.isPublic ? "公開" : "非公開"}
-                    </span>
-                  </div>
-                  <div class="text-sm text-gray-500 mt-1">
-                    {new Date(note.updatedAt).toLocaleDateString("ja-JP")}
-                  </div>
-                </a>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                    </button>
+                  </form>
+                </div>
               ))}
             </div>
           )}
