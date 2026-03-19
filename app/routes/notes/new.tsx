@@ -46,7 +46,7 @@ export const POST = createRoute(async (c) => {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  const defaultContent = `${body.title || "Untitled"}\n  トピック1\n  トピック2`;
+  const defaultContent = `トピック1\nトピック2`;
 
   await db.insert(notes).values({
     id,

@@ -2,15 +2,21 @@ import { useState, useEffect, useRef, useCallback } from "hono/jsx";
 import { parseTextToNodes, findNodeAtPosition } from "../utils/mindmapParser";
 import type { MindMapNode, SelectionState } from "../types/MindMap";
 
-const DEMO_TEXT = `Mindmap Lite
-  使い方
-    インデントで階層を作る
-    Tabでインデント追加
-    Shift+Tabでインデント削除
-  特徴
-    リアルタイムプレビュー
-    テキストベース
-    シンプル`;
+const DEMO_TEXT = `使い方
+  インデントで階層を作る
+  Tabでインデント追加
+  Shift+Tabでインデント削除
+特徴
+  リアルタイムプレビュー
+  テキストベース
+  シンプル`;
+
+// Prepend title as root and indent all content by 2 spaces
+function buildMindmapText(rootTitle: string, content: string): string {
+  const lines = content.split("\n");
+  const indented = lines.map((line) => (line.trim() === "" ? "" : "  " + line));
+  return rootTitle + "\n" + indented.join("\n");
+}
 
 interface Props {
   noteId?: string;
@@ -26,7 +32,7 @@ export default function MindmapEditor({
   initialIsPublic,
 }: Props) {
   const [text, setText] = useState(initialContent || DEMO_TEXT);
-  const [title, setTitle] = useState(initialTitle || "");
+  const [title, setTitle] = useState(initialTitle || "Mindmap Lite");
   const [isPublic, setIsPublic] = useState(initialIsPublic || false);
   const [saveStatus, setSaveStatus] = useState("");
   const [nodes, setNodes] = useState<MindMapNode[]>([]);
@@ -80,11 +86,13 @@ export default function MindmapEditor({
     };
   }, [text, noteId, saveNote]);
 
-  // Parse text to nodes
+  // Parse text to nodes (prepend title as root)
   useEffect(() => {
-    const parsed = parseTextToNodes(text);
+    const rootTitle = title || "Mindmap";
+    const mindmapText = buildMindmapText(rootTitle, text);
+    const parsed = parseTextToNodes(mindmapText);
     setNodes(parsed);
-  }, [text]);
+  }, [text, title]);
 
   // Render mindmap with vanilla Konva
   useEffect(() => {
@@ -331,33 +339,35 @@ export default function MindmapEditor({
   return (
     <div class="flex h-full">
       <div class="w-1/3 border-r flex flex-col">
-        {noteId && (
-          <div class="flex items-center gap-2 px-4 py-2 border-b bg-gray-50">
-            <input
-              type="text"
-              value={title}
-              onInput={(e: any) => setTitle(e.currentTarget.value)}
-              onBlur={() => saveNote(text)}
-              class="flex-1 text-sm px-2 py-1 border rounded"
-              placeholder="タイトル"
-            />
-            <label class="flex items-center gap-1 text-xs whitespace-nowrap">
-              <input
-                type="checkbox"
-                checked={isPublic}
-                onChange={(e: any) => {
-                  const newVal = e.currentTarget.checked;
-                  setIsPublic(newVal);
-                  saveNote(text, undefined, newVal);
-                }}
-              />
-              公開
-            </label>
-            <span class="text-xs text-gray-400 whitespace-nowrap">
-              {saveStatus}
-            </span>
-          </div>
-        )}
+        <div class="flex items-center gap-2 px-4 py-2 border-b bg-gray-50">
+          <input
+            type="text"
+            value={title}
+            onInput={(e: any) => setTitle(e.currentTarget.value)}
+            onBlur={() => noteId && saveNote(text)}
+            class="flex-1 text-sm px-2 py-1 border rounded font-semibold"
+            placeholder="タイトル（ルートノード）"
+          />
+          {noteId && (
+            <>
+              <label class="flex items-center gap-1 text-xs whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={isPublic}
+                  onChange={(e: any) => {
+                    const newVal = e.currentTarget.checked;
+                    setIsPublic(newVal);
+                    saveNote(text, undefined, newVal);
+                  }}
+                />
+                公開
+              </label>
+              <span class="text-xs text-gray-400 whitespace-nowrap">
+                {saveStatus}
+              </span>
+            </>
+          )}
+        </div>
         <textarea
           ref={textareaRef}
           value={text}

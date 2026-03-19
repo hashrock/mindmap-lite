@@ -4,18 +4,26 @@ import type { MindMapNode } from "../types/MindMap";
 
 interface Props {
   initialContent: string;
+  title: string;
   readOnly?: boolean;
 }
 
-export default function MindmapViewer({ initialContent, readOnly }: Props) {
+function buildMindmapText(rootTitle: string, content: string): string {
+  const lines = content.split("\n");
+  const indented = lines.map((line) => (line.trim() === "" ? "" : "  " + line));
+  return rootTitle + "\n" + indented.join("\n");
+}
+
+export default function MindmapViewer({ initialContent, title, readOnly }: Props) {
   const [nodes, setNodes] = useState<MindMapNode[]>([]);
   const canvasRef = useRef<HTMLDivElement>(null);
   const konvaStageRef = useRef<any>(null);
 
   useEffect(() => {
-    const parsed = parseTextToNodes(initialContent);
+    const mindmapText = buildMindmapText(title || "Mindmap", initialContent);
+    const parsed = parseTextToNodes(mindmapText);
     setNodes(parsed);
-  }, [initialContent]);
+  }, [initialContent, title]);
 
   useEffect(() => {
     if (!canvasRef.current || nodes.length === 0) return;

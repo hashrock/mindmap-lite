@@ -41,7 +41,7 @@ export default createRoute(async (c) => {
         <h1 class="font-semibold">{note.title}</h1>
       </header>
       <div class="flex-1">
-        <MindmapViewer initialContent={note.content} readOnly={true} />
+        <MindmapViewer initialContent={note.content} title={note.title} readOnly={true} />
       </div>
     </div>
   );
