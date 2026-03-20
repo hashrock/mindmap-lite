@@ -35,12 +35,6 @@ export default createRoute(async (c) => {
       <header class="flex items-center justify-between mb-8">
         <h1 class="text-2xl font-bold">Mindmap Lite</h1>
         <div class="flex items-center gap-3">
-          <a
-            href="/guest"
-            class="px-4 py-2 text-sm border rounded-lg hover:bg-gray-100 transition"
-          >
-            ゲストで試す
-          </a>
           {user ? (
             <div class="flex items-center gap-3">
               {user.avatarUrl && (
@@ -59,12 +53,20 @@ export default createRoute(async (c) => {
               </a>
             </div>
           ) : (
-            <a
-              href="/auth/google"
-              class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-            >
-              Googleでログイン
-            </a>
+            <>
+              <a
+                href="/guest"
+                class="px-4 py-2 text-sm border rounded-lg hover:bg-gray-100 transition"
+              >
+                ゲストで試す
+              </a>
+              <a
+                href="/auth/google"
+                class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                Googleでログイン
+              </a>
+            </>
           )}
         </div>
       </header>
