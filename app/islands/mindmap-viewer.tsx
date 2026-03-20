@@ -152,15 +152,15 @@ export default function MindmapViewer({ initialContent, title, readOnly }: Props
   }, [nodes]);
 
   return (
-    <div class="flex h-full">
+    <div class="flex flex-col md:flex-row h-full">
       {!readOnly && (
-        <div class="w-1/3 border-r">
+        <div class="w-full md:w-1/3 border-b md:border-b-0 md:border-r max-h-[30vh] md:max-h-none overflow-auto">
           <pre class="p-4 font-mono text-sm whitespace-pre-wrap">
             {initialContent}
           </pre>
         </div>
       )}
-      <div ref={canvasRef} class="flex-1 bg-white overflow-hidden" />
+      <div ref={canvasRef} class="flex-1 bg-white overflow-hidden min-h-0" />
     </div>
   );
 }

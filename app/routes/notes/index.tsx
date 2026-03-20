@@ -31,17 +31,17 @@ export default createRoute(async (c) => {
     : [];
 
   return c.render(
-    <div class="max-w-4xl mx-auto px-4 py-8">
-      <header class="flex items-center justify-between mb-8">
-        <h1 class="text-2xl font-bold">Mindmap Lite</h1>
-        <div class="flex items-center gap-3">
+    <div class="max-w-4xl mx-auto px-4 py-4 md:py-8">
+      <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6 md:mb-8">
+        <h1 class="text-xl md:text-2xl font-bold">Mindmap Lite</h1>
+        <div class="flex items-center gap-2 sm:gap-3 flex-wrap">
           {user ? (
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 sm:gap-3">
               {user.avatarUrl && (
                 <img
                   src={user.avatarUrl}
                   alt=""
-                  class="w-8 h-8 rounded-full"
+                  class="w-7 h-7 sm:w-8 sm:h-8 rounded-full"
                 />
               )}
               <span class="text-sm">{user.name}</span>
@@ -56,13 +56,13 @@ export default createRoute(async (c) => {
             <>
               <a
                 href="/guest"
-                class="px-4 py-2 text-sm border rounded-lg hover:bg-gray-100 transition"
+                class="px-3 md:px-4 py-2 text-sm border rounded-lg hover:bg-gray-100 transition"
               >
                 ゲストで試す
               </a>
               <a
                 href="/auth/google"
-                class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                class="px-3 md:px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
               >
                 Googleでログイン
               </a>
