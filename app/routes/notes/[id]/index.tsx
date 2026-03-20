@@ -34,11 +34,11 @@ export default createRoute(async (c) => {
 
   return c.render(
     <div class="h-screen flex flex-col">
-      <header class="flex items-center gap-4 px-4 py-2 border-b bg-white">
+      <header class="flex items-center gap-2 md:gap-4 px-3 md:px-4 py-2 border-b bg-white">
         <a href="/notes" class="text-blue-600 hover:underline text-sm">
           &larr; 一覧
         </a>
-        <h1 class="font-semibold">{note.title}</h1>
+        <h1 class="font-semibold text-sm md:text-base truncate">{note.title}</h1>
       </header>
       <div class="flex-1">
         <MindmapViewer initialContent={note.content} title={note.title} readOnly={true} />

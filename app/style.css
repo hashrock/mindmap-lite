@@ -1,1 +1,6 @@
 @import "tailwindcss" source("../app");
+
+/* Prevent browser gestures on the Konva canvas for mobile touch */
+.konvajs-content {
+  touch-action: none;
+}
