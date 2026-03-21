@@ -17,56 +17,44 @@ function buildMindmapText(rootTitle: string, content: string): string {
   return rootTitle + "\n" + indented.join("\n");
 }
 
-// Convert textarea position to mindmap text position
-function textareaPosToMindmapPos(pos: number, titleStr: string, content: string): number {
-  const lines = content.split("\n");
-  let remaining = pos;
-  let lineIdx = 0;
-  while (lineIdx < lines.length && remaining > lines[lineIdx].length) {
-    remaining -= lines[lineIdx].length + 1;
-    lineIdx++;
-  }
-  let mindmapPos = titleStr.length + 1;
-  for (let i = 0; i < lineIdx; i++) {
-    const isBlank = lines[i].trim() === "";
-    mindmapPos += (isBlank ? 0 : 2) + lines[i].length + 1;
-  }
-  const currentLine = lines[lineIdx];
-  if (currentLine !== undefined && currentLine.trim() !== "") {
-    mindmapPos += 2 + remaining;
-  } else {
-    mindmapPos += remaining;
-  }
-  return mindmapPos;
-}
-
-// Get cursor position relative to node text
+// Get cursor column within node text (direct from line/col, no coordinate conversion)
 function getCursorPositionInNode(
   node: MindMapNode,
   selState: SelectionState
 ): number | null {
   if (selState.activeNodeId !== node.id) return null;
-  const lineStart = node.lineStartPos ?? node.startPos;
-  const lineEnd = node.lineEndPos ?? node.endPos;
-  if (selState.cursorPos >= lineStart && selState.cursorPos <= lineEnd) {
-    const relativePos = selState.cursorPos - node.startPos;
-    return Math.min(Math.max(0, relativePos), node.text.length);
-  }
-  return null;
+  return Math.min(Math.max(0, selState.cursorCol), node.text.length);
 }
 
-// Get selection range relative to node text
+// Get selection range within a node using textarea positions
+// We convert textarea positions to per-line columns for comparison
 function getSelectionInNode(
   node: MindMapNode,
-  selState: SelectionState
+  selState: SelectionState,
+  text: string
 ): { start: number; end: number } | null {
   const { selectionStart, selectionEnd } = selState;
   if (selectionStart === selectionEnd) return null;
-  if (selectionEnd >= node.startPos && selectionStart <= node.endPos) {
-    const start = Math.max(0, selectionStart - node.startPos);
-    const end = Math.min(node.text.length, selectionEnd - node.startPos);
-    if (start < end) return { start, end };
-  }
+
+  // Find textarea line range for this node (node.lineNumber is in mindmap coords, -1 for textarea)
+  const textareaLineIndex = node.lineNumber - 1;
+  if (textareaLineIndex < 0) return null;
+  const lines = text.split("\n");
+  if (textareaLineIndex >= lines.length) return null;
+
+  // Calculate line start/end positions in textarea
+  let lineStart = 0;
+  for (let i = 0; i < textareaLineIndex; i++) lineStart += lines[i].length + 1;
+  const line = lines[textareaLineIndex];
+  const lineEnd = lineStart + line.length;
+  const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
+  const textStart = lineStart + leadingSpaces;
+
+  // Check overlap
+  if (selectionEnd <= textStart || selectionStart >= lineEnd) return null;
+  const start = Math.max(0, selectionStart - textStart);
+  const end = Math.min(node.text.length, selectionEnd - textStart);
+  if (start < end) return { start, end };
   return null;
 }
 
@@ -103,7 +91,8 @@ export default function MindmapEditor({
   const [isPublic, setIsPublic] = useState(initialIsPublic || false);
   const [nodesVersion, setNodesVersion] = useState(0);
   const [selectionState, setSelectionState] = useState<SelectionState>({
-    cursorPos: 0,
+    cursorLine: 0,
+    cursorCol: 0,
     selectionStart: 0,
     selectionEnd: 0,
     activeNodeId: null,
@@ -438,7 +427,7 @@ export default function MindmapEditor({
       group.add(rect);
 
       // Selection highlight
-      const selection = getSelectionInNode(node, selectionState);
+      const selection = getSelectionInNode(node, selectionState, text);
       if (selection && node.text.length > 0) {
         const offsets = cursorOffsets.get(node.id);
         if (offsets) {
@@ -559,7 +548,7 @@ export default function MindmapEditor({
     layer.draw();
   }, [nodes, selectionState, nodesVersion]);
 
-  // Selection sync
+  // Selection sync: compute line/col directly from textarea
   const updateSelection = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -567,19 +556,30 @@ export default function MindmapEditor({
     const tPos = textarea.selectionDirection === "forward"
       ? textarea.selectionEnd
       : textarea.selectionStart;
-    const beforeCursor = textarea.value.substring(0, tPos);
+    const val = textarea.value;
+    const beforeCursor = val.substring(0, tPos);
     const textareaLine = beforeCursor.split("\n").length - 1;
     const mindmapLine = textareaLine + 1;
     const activeNode =
       nodes.find((n) => n.lineNumber === mindmapLine) || null;
-    const titleStr = title || "Mindmap";
+
+    // Calculate column within node text (after leading spaces)
+    const lines = val.split("\n");
+    const line = lines[textareaLine] || "";
+    const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
+    let lineStart = 0;
+    for (let i = 0; i < textareaLine; i++) lineStart += lines[i].length + 1;
+    const colInLine = tPos - lineStart;
+    const cursorCol = Math.max(0, colInLine - leadingSpaces);
+
     setSelectionState({
-      cursorPos: textareaPosToMindmapPos(tPos, titleStr, text),
-      selectionStart: textareaPosToMindmapPos(textarea.selectionStart, titleStr, text),
-      selectionEnd: textareaPosToMindmapPos(textarea.selectionEnd, titleStr, text),
+      cursorLine: mindmapLine,
+      cursorCol,
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd,
       activeNodeId: activeNode?.id || null,
     });
-  }, [nodes, title, text]);
+  }, [nodes]);
   updateSelectionRef.current = updateSelection;
 
   useEffect(() => {

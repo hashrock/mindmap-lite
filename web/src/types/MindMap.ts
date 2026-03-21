@@ -12,7 +12,10 @@ export interface MindMapNode {
 }
 
 export interface SelectionState {
-  cursorPos: number;
+  // Cursor position: line index in mindmap (0=title, 1+=content) and column within node text
+  cursorLine: number;
+  cursorCol: number;
+  // Selection range as textarea positions (for cross-node highlight calculation)
   selectionStart: number;
   selectionEnd: number;
   activeNodeId: string | null;
