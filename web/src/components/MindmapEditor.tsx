@@ -471,18 +471,16 @@ export default function MindmapEditor({
 
       // Cursor line
       const cursorPos = getCursorPositionInNode(node, selectionState);
-      if (cursorPos !== null && node.text.length > 0) {
+      if (cursorPos !== null) {
         const offsets = cursorOffsets.get(node.id);
-        if (offsets) {
-          const cursorX = node.x + nodePadding + (offsets[cursorPos] || 0);
-          const cursorLine = new Konva.Line({
-            points: [cursorX, node.y - 10, cursorX, node.y + 10],
-            stroke: isRoot ? "#ffffff" : "#000000",
-            strokeWidth: 2,
-            listening: false,
-          });
-          group.add(cursorLine);
-        }
+        const cursorX = node.x + nodePadding + (offsets?.[cursorPos] || 0);
+        const cursorLine = new Konva.Line({
+          points: [cursorX, node.y - 10, cursorX, node.y + 10],
+          stroke: isRoot ? "#ffffff" : "#000000",
+          strokeWidth: 2,
+          listening: false,
+        });
+        group.add(cursorLine);
       }
 
       // Mousedown → jump to clicked character position in textarea
