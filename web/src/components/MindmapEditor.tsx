@@ -152,6 +152,11 @@ export default function MindmapEditor({
     setNodes(parsed);
   }, [text, title]);
 
+  // Auto-focus textarea on mount
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
+
   // Load Konva and create stage once
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -449,6 +454,53 @@ export default function MindmapEditor({
         );
       }, 0);
       return;
+    }
+
+    // ArrowRight at end of line → skip indent of next line
+    if (e.key === "ArrowRight" && !e.shiftKey && selectionStart === selectionEnd) {
+      const lines = text.split("\n");
+      let pos = 0;
+      let lineIndex = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (pos + lines[i].length >= selectionStart) {
+          lineIndex = i;
+          break;
+        }
+        pos += lines[i].length + 1;
+      }
+      const lineEnd = pos + lines[lineIndex].length;
+      if (selectionStart === lineEnd && lineIndex < lines.length - 1) {
+        const nextLine = lines[lineIndex + 1];
+        const leadingSpaces = nextLine.match(/^(\s*)/)?.[1]?.length || 0;
+        if (leadingSpaces > 0) {
+          e.preventDefault();
+          const newPos = lineEnd + 1 + leadingSpaces; // +1 for \n
+          textarea.setSelectionRange(newPos, newPos);
+          return;
+        }
+      }
+    }
+
+    // ArrowLeft at start of text (after indent) → jump to end of prev line
+    if (e.key === "ArrowLeft" && !e.shiftKey && selectionStart === selectionEnd) {
+      const lines = text.split("\n");
+      let pos = 0;
+      let lineIndex = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (pos + lines[i].length >= selectionStart) {
+          lineIndex = i;
+          break;
+        }
+        pos += lines[i].length + 1;
+      }
+      const leadingSpaces = lines[lineIndex].match(/^(\s*)/)?.[1]?.length || 0;
+      const textStart = pos + leadingSpaces;
+      if (selectionStart === textStart && leadingSpaces > 0 && lineIndex > 0) {
+        e.preventDefault();
+        const prevLineEnd = pos - 1; // end of previous line
+        textarea.setSelectionRange(prevLineEnd, prevLineEnd);
+        return;
+      }
     }
 
     if (e.key === "Tab") {
