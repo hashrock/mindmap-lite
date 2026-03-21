@@ -732,13 +732,17 @@ export default function MindmapEditor({
 
       if (e.key === "ArrowLeft") {
         if (e.metaKey || e.ctrlKey) {
-          // Cmd+Left at indent area → jump to prev line end
+          e.preventDefault();
           if (posInLine <= leadingSpaces && lineIndex > 0) {
-            e.preventDefault();
+            // Already at/before indent → jump to prev line end
             const prevLineEnd = currentPos - 1;
             textarea.setSelectionRange(prevLineEnd, prevLineEnd);
-            return;
+          } else {
+            // Jump to first non-space character (not line start)
+            const targetPos = currentPos + leadingSpaces;
+            textarea.setSelectionRange(targetPos, targetPos);
           }
+          return;
         } else {
           // At first non-space char → jump to prev line end
           if (leadingSpaces > 0 && posInLine === leadingSpaces && selectionStart === selectionEnd && lineIndex > 0) {
