@@ -564,7 +564,10 @@ export default function MindmapEditor({
   const updateSelection = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    const tPos = textarea.selectionStart;
+    // Cursor is at the moving end of the selection
+    const tPos = textarea.selectionDirection === "forward"
+      ? textarea.selectionEnd
+      : textarea.selectionStart;
     const beforeCursor = textarea.value.substring(0, tPos);
     const textareaLine = beforeCursor.split("\n").length - 1;
     const mindmapLine = textareaLine + 1;
