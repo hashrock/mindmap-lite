@@ -415,12 +415,11 @@ export default function MindmapEditor({
         }
       }
 
-      // Mousedown → jump to textarea (instant, no delay needed)
+      // Mousedown → jump to textarea
       group.on("mousedown touchstart", () => {
         const textarea = textareaRef.current;
         if (!textarea) return;
         if (node.lineNumber === 0) return;
-        textarea.focus();
         const textareaLineIndex = node.lineNumber - 1;
         const lines = textarea.value.split("\n");
         let pos = 0;
@@ -429,8 +428,12 @@ export default function MindmapEditor({
         }
         const line = lines[textareaLineIndex] || "";
         const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
-        textarea.setSelectionRange(pos + leadingSpaces, pos + leadingSpaces);
-        updateSelection();
+        // Delay focus to after mousedown completes (canvas steals focus)
+        setTimeout(() => {
+          textarea.focus();
+          textarea.setSelectionRange(pos + leadingSpaces, pos + leadingSpaces);
+          updateSelection();
+        }, 0);
       });
 
       // Double-click → select node text in textarea
