@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { parseTextToNodes } from "../lib/mindmapParser";
 import type { MindMapNode, SelectionState } from "../types/MindMap";
 
@@ -101,7 +101,7 @@ export default function MindmapEditor({
   const [text, setText] = useState(initialContent || DEMO_TEXT);
   const [title, setTitle] = useState(initialTitle || "Mindmap Lite");
   const [isPublic, setIsPublic] = useState(initialIsPublic || false);
-  const [nodes, setNodes] = useState<MindMapNode[]>([]);
+  const [nodesVersion, setNodesVersion] = useState(0);
   const [selectionState, setSelectionState] = useState<SelectionState>({
     cursorPos: 0,
     selectionStart: 0,
@@ -163,14 +163,13 @@ export default function MindmapEditor({
     };
   }, [text, noteId, saveNote]);
 
-  // Parse text to nodes
-  useEffect(() => {
+  // Parse text to nodes (synchronous via useMemo)
+  const nodes = useMemo(() => {
     const rootTitle = title || "Mindmap";
     const mindmapText = buildMindmapText(rootTitle, text);
-    const parsed = parseTextToNodes(mindmapText);
-    setNodes(parsed);
-    nodesRef.current = parsed;
+    return parseTextToNodes(mindmapText);
   }, [text, title]);
+  nodesRef.current = nodes;
 
   // Auto-focus textarea on mount
   useEffect(() => {
@@ -290,7 +289,7 @@ export default function MindmapEditor({
       resizeObserver.observe(container);
 
       // Trigger initial draw
-      setNodes((prev) => [...prev]);
+      setNodesVersion((v) => v + 1);
     });
 
     return () => {
@@ -558,7 +557,7 @@ export default function MindmapEditor({
     });
 
     layer.draw();
-  }, [nodes, selectionState]);
+  }, [nodes, selectionState, nodesVersion]);
 
   // Selection sync
   const updateSelection = useCallback(() => {
