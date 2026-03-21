@@ -733,13 +733,21 @@ export default function MindmapEditor({
       if (e.key === "ArrowLeft") {
         if (e.metaKey || e.ctrlKey) {
           e.preventDefault();
+          let targetPos: number;
           if (posInLine <= leadingSpaces && lineIndex > 0) {
-            // Already at/before indent → jump to prev line end
-            const prevLineEnd = currentPos - 1;
-            textarea.setSelectionRange(prevLineEnd, prevLineEnd);
+            targetPos = currentPos - 1;
           } else {
-            // Jump to first non-space character (not line start)
-            const targetPos = currentPos + leadingSpaces;
+            targetPos = currentPos + leadingSpaces;
+          }
+          if (e.shiftKey) {
+            // Extend selection: anchor is the other end
+            const anchor = selectionEnd;
+            textarea.setSelectionRange(Math.min(targetPos, anchor), Math.max(targetPos, anchor));
+            // Preserve direction so further shifts work
+            if (targetPos < anchor) {
+              textarea.selectionDirection = "backward";
+            }
+          } else {
             textarea.setSelectionRange(targetPos, targetPos);
           }
           return;
@@ -753,15 +761,26 @@ export default function MindmapEditor({
         }
       } else if (e.key === "ArrowRight") {
         if (e.metaKey || e.ctrlKey) {
-          // Cmd+Right at line end → skip indent of next line
+          e.preventDefault();
+          let targetPos: number;
           if (posInLine >= currentLine.length && lineIndex < lines.length - 1) {
-            e.preventDefault();
             const nextLine = lines[lineIndex + 1];
             const nextSpaces = nextLine.match(/^(\s*)/)?.[1]?.length || 0;
-            const targetPos = currentPos + currentLine.length + 1 + nextSpaces;
-            textarea.setSelectionRange(targetPos, targetPos);
-            return;
+            targetPos = currentPos + currentLine.length + 1 + nextSpaces;
+          } else {
+            // Jump to end of line (default Cmd+Right behavior)
+            targetPos = currentPos + currentLine.length;
           }
+          if (e.shiftKey) {
+            const anchor = selectionStart;
+            textarea.setSelectionRange(Math.min(targetPos, anchor), Math.max(targetPos, anchor));
+            if (targetPos > anchor) {
+              textarea.selectionDirection = "forward";
+            }
+          } else {
+            textarea.setSelectionRange(targetPos, targetPos);
+          }
+          return;
         } else {
           // At line end → skip indent of next line
           if (posInLine === currentLine.length && lineIndex < lines.length - 1 && selectionStart === selectionEnd) {
