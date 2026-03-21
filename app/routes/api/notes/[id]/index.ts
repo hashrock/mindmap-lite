@@ -4,9 +4,14 @@ import { notes } from "../../../../db/schema";
 import { eq } from "drizzle-orm";
 import { getSession } from "../../../../utils/session";
 
+function getUser(c: any) {
+  // Middleware already sets user (including dev bypass)
+  return c.get("user");
+}
+
 // PUT /api/notes/:id - update a note
 export const PUT = createRoute(async (c) => {
-  const user = await getSession(c);
+  const user = getUser(c) || (await getSession(c));
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
   const id = c.req.param("id");
@@ -38,7 +43,7 @@ export const PUT = createRoute(async (c) => {
 
 // DELETE /api/notes/:id
 export const DELETE = createRoute(async (c) => {
-  const user = await getSession(c);
+  const user = getUser(c) || (await getSession(c));
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
   const id = c.req.param("id");

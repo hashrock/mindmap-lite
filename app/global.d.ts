@@ -17,6 +17,7 @@ declare module "hono" {
       GOOGLE_ID: string;
       GOOGLE_SECRET: string;
       SESSION_SECRET: string;
+      DEV_BYPASS_AUTH?: string;
     };
   }
 }
