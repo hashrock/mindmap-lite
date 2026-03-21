@@ -823,23 +823,32 @@ export default function MindmapEditor({
     // Tab: indent/dedent
     if (e.key === "Tab") {
       e.preventDefault();
-      const { lineIndex, lines } = getLineInfo(text, selectionStart);
+      const currentValue = textarea.value;
+      const lines = currentValue.split("\n");
+      let pos = 0;
+      let lineIndex = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (pos + lines[i].length >= selectionStart) {
+          lineIndex = i;
+          break;
+        }
+        pos += lines[i].length + 1;
+      }
 
       if (e.shiftKey) {
         if (lines[lineIndex].startsWith("  ")) {
           lines[lineIndex] = lines[lineIndex].substring(2);
-          setText(lines.join("\n"));
-          setTimeout(() => {
-            const newPos = Math.max(0, selectionStart - 2);
-            textarea.setSelectionRange(newPos, newPos);
-          }, 0);
+          const newText = lines.join("\n");
+          setText(newText);
+          const newPos = Math.max(0, selectionStart - 2);
+          setTimeout(() => textarea.setSelectionRange(newPos, newPos), 0);
         }
       } else {
         lines[lineIndex] = "  " + lines[lineIndex];
-        setText(lines.join("\n"));
-        setTimeout(() => {
-          textarea.setSelectionRange(selectionStart + 2, selectionStart + 2);
-        }, 0);
+        const newText = lines.join("\n");
+        setText(newText);
+        const newPos = selectionStart + 2;
+        setTimeout(() => textarea.setSelectionRange(newPos, newPos), 0);
       }
       return;
     }
