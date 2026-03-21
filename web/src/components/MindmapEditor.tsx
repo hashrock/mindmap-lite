@@ -415,26 +415,31 @@ export default function MindmapEditor({
         }
       }
 
-      // Click → jump to textarea
+      // Click → jump to textarea (delayed to allow dblclick to cancel)
+      let clickTimer: ReturnType<typeof setTimeout> | null = null;
       group.on("click tap", () => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-        if (node.lineNumber === 0) return;
-        textarea.focus();
-        const textareaLineIndex = node.lineNumber - 1;
-        const lines = textarea.value.split("\n");
-        let pos = 0;
-        for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
-          pos += lines[i].length + 1;
-        }
-        const line = lines[textareaLineIndex] || "";
-        const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
-        textarea.setSelectionRange(pos + leadingSpaces, pos + leadingSpaces);
-        updateSelection();
+        if (clickTimer) clearTimeout(clickTimer);
+        clickTimer = setTimeout(() => {
+          const textarea = textareaRef.current;
+          if (!textarea) return;
+          if (node.lineNumber === 0) return;
+          textarea.focus();
+          const textareaLineIndex = node.lineNumber - 1;
+          const lines = textarea.value.split("\n");
+          let pos = 0;
+          for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
+            pos += lines[i].length + 1;
+          }
+          const line = lines[textareaLineIndex] || "";
+          const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
+          textarea.setSelectionRange(pos + leadingSpaces, pos + leadingSpaces);
+          updateSelection();
+        }, 200);
       });
 
       // Double-click → select node text in textarea
       group.on("dblclick dbltap", () => {
+        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
         const textarea = textareaRef.current;
         if (!textarea) return;
         if (node.lineNumber === 0) return;
