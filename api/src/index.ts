@@ -1,0 +1,60 @@
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { getSession } from "./utils/session";
+import { drizzle } from "drizzle-orm/d1";
+import { users } from "./db/schema";
+import { eq } from "drizzle-orm";
+import { auth } from "./routes/auth";
+import { notesApi } from "./routes/notes";
+import type { Env } from "./global.d";
+
+const DEV_USER = {
+  id: "dev-user",
+  email: "dev@localhost",
+  name: "Dev User",
+  avatarUrl: "",
+};
+
+const app = new Hono<Env>();
+
+// CORS for local dev
+app.use(
+  "/api/*",
+  cors({ origin: "http://localhost:5173", credentials: true })
+);
+app.use(
+  "/auth/*",
+  cors({ origin: "http://localhost:5173", credentials: true })
+);
+
+// Session middleware
+app.use("*", async (c, next) => {
+  if (c.env.DEV_BYPASS_AUTH) {
+    const db = drizzle(c.env.DB);
+    const existing = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, DEV_USER.id))
+      .get();
+    if (!existing) {
+      await db.insert(users).values({
+        id: DEV_USER.id,
+        email: DEV_USER.email,
+        name: DEV_USER.name,
+        avatarUrl: DEV_USER.avatarUrl,
+      });
+    }
+    c.set("user", DEV_USER);
+    await next();
+    return;
+  }
+
+  const user = await getSession(c);
+  c.set("user", user);
+  await next();
+});
+
+app.route("/auth", auth);
+app.route("/api/notes", notesApi);
+
+export default app;

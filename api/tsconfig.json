@@ -4,7 +4,9 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "lib": ["ESNext"],
+    "types": ["@cloudflare/workers-types/2023-07-01"]
   },
-  "include": ["drizzle.config.ts"]
+  "include": ["src/**/*.ts"]
 }
