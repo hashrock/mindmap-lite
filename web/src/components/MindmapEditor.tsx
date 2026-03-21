@@ -710,10 +710,10 @@ export default function MindmapEditor({
 
     // Arrow keys with indent skip
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
-      // Let default handle Shift+Up/Down (selection)
+      // Let default handle Shift+Up/Down (selection, without Cmd)
       if (e.shiftKey && !e.metaKey && !e.ctrlKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) return;
-      // Let default handle extending selection with Shift+Left/Right
-      if (e.shiftKey && !e.metaKey && !e.ctrlKey && selectionStart !== selectionEnd) return;
+      // Let default handle extending selection with Shift+Left/Right (without Cmd)
+      if (e.shiftKey && !e.metaKey && !e.ctrlKey && (e.key === "ArrowLeft" || e.key === "ArrowRight") && selectionStart !== selectionEnd) return;
 
       const lines = text.split("\n");
       const refPos = (e.key === "ArrowRight" || e.key === "ArrowDown") ? selectionEnd : selectionStart;
