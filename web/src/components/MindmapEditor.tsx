@@ -116,6 +116,10 @@ export default function MindmapEditor({
   const konvaRef = useRef<any>(null);
   const saveTimerRef = useRef<any>(null);
   const saveStatusRef = useRef<HTMLSpanElement>(null);
+  const dragStateRef = useRef<{ anchorPos: number } | null>(null);
+  const cursorOffsetsRef = useRef<Map<string, number[]>>(new Map());
+  const nodesRef = useRef<MindMapNode[]>([]);
+  const updateSelectionRef = useRef<() => void>(() => {});
 
   const updateSaveStatus = useCallback((status: string) => {
     if (saveStatusRef.current) {
@@ -165,6 +169,7 @@ export default function MindmapEditor({
     const mindmapText = buildMindmapText(rootTitle, text);
     const parsed = parseTextToNodes(mindmapText);
     setNodes(parsed);
+    nodesRef.current = parsed;
   }, [text, title]);
 
   // Auto-focus textarea on mount
@@ -212,6 +217,69 @@ export default function MindmapEditor({
           y: pointer.y - mousePointTo.y * limitedScale,
         });
         layer.draw();
+      });
+
+      // Drag selection on stage
+      stage.on("mousemove touchmove", () => {
+        const drag = dragStateRef.current;
+        if (!drag) return;
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+
+        const pointer = stage.getPointerPosition();
+        if (!pointer) return;
+        const scale = stage.scaleX();
+        const worldX = (pointer.x - stage.x()) / scale;
+        const worldY = (pointer.y - stage.y()) / scale;
+
+        // Find closest node by Y coordinate
+        const currentNodes = nodesRef.current;
+        let closestNode: MindMapNode | null = null;
+        let closestDist = Infinity;
+        for (const n of currentNodes) {
+          if (n.lineNumber === 0) continue;
+          const dist = Math.abs(n.y - worldY);
+          if (dist < closestDist) {
+            closestDist = dist;
+            closestNode = n;
+          }
+        }
+        if (!closestNode) return;
+
+        const offsets = cursorOffsetsRef.current.get(closestNode.id);
+        let charIdx = closestNode.text.length;
+        if (offsets) {
+          const relX = worldX - closestNode.x - 20; // 20 = nodePadding
+          let bestIdx = 0;
+          let bestDist2 = Math.abs(relX);
+          for (let i = 1; i < offsets.length; i++) {
+            const d = Math.abs(relX - offsets[i]);
+            if (d < bestDist2) { bestDist2 = d; bestIdx = i; }
+          }
+          charIdx = bestIdx;
+        }
+
+        const textareaLineIndex = closestNode.lineNumber - 1;
+        const lines = textarea.value.split("\n");
+        let lineStart = 0;
+        for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
+          lineStart += lines[i].length + 1;
+        }
+        const line = lines[textareaLineIndex] || "";
+        const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
+        const currentPos = lineStart + leadingSpaces + charIdx;
+
+        const start = Math.min(drag.anchorPos, currentPos);
+        const end = Math.max(drag.anchorPos, currentPos);
+        textarea.setSelectionRange(start, end);
+        updateSelectionRef.current();
+      });
+
+      stage.on("mouseup touchend", () => {
+        if (dragStateRef.current) {
+          dragStateRef.current = null;
+          stage.draggable(true);
+        }
       });
 
       const resizeObserver = new ResizeObserver(() => {
@@ -319,6 +387,8 @@ export default function MindmapEditor({
         cursorOffsets.set(node.id, offsets);
       }
     });
+    // Keep ref in sync for drag handler
+    cursorOffsetsRef.current = cursorOffsets;
 
     // Draw connections
     nodes.forEach((node) => {
@@ -456,6 +526,11 @@ export default function MindmapEditor({
         }
 
         const targetPos = lineStartPos + leadingSpaces + charIndex;
+        // Start drag selection
+        dragStateRef.current = { anchorPos: targetPos };
+        const stage = konvaStageRef.current;
+        if (stage) stage.draggable(false);
+
         setTimeout(() => {
           textarea.focus();
           textarea.setSelectionRange(targetPos, targetPos);
@@ -505,6 +580,7 @@ export default function MindmapEditor({
       activeNodeId: activeNode?.id || null,
     });
   }, [nodes, title, text]);
+  updateSelectionRef.current = updateSelection;
 
   useEffect(() => {
     const handleSelectionChange = () => updateSelection();
