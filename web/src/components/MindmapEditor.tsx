@@ -17,6 +17,60 @@ function buildMindmapText(rootTitle: string, content: string): string {
   return rootTitle + "\n" + indented.join("\n");
 }
 
+// Convert textarea position to mindmap text position
+function textareaPosToMindmapPos(pos: number, titleStr: string, content: string): number {
+  const lines = content.split("\n");
+  let remaining = pos;
+  let lineIdx = 0;
+  while (lineIdx < lines.length && remaining > lines[lineIdx].length) {
+    remaining -= lines[lineIdx].length + 1;
+    lineIdx++;
+  }
+  // Map to mindmap text coordinates
+  let mindmapPos = titleStr.length + 1; // title + \n
+  for (let i = 0; i < lineIdx; i++) {
+    const isBlank = lines[i].trim() === "";
+    mindmapPos += (isBlank ? 0 : 2) + lines[i].length + 1;
+  }
+  const currentLine = lines[lineIdx];
+  if (currentLine !== undefined && currentLine.trim() !== "") {
+    mindmapPos += 2 + remaining; // 2 for "  " indent prefix
+  } else {
+    mindmapPos += remaining;
+  }
+  return mindmapPos;
+}
+
+// Get cursor position relative to node text
+function getCursorPositionInNode(
+  node: MindMapNode,
+  selState: SelectionState
+): number | null {
+  if (selState.activeNodeId !== node.id) return null;
+  const lineStart = node.lineStartPos ?? node.startPos;
+  const lineEnd = node.lineEndPos ?? node.endPos;
+  if (selState.cursorPos >= lineStart && selState.cursorPos <= lineEnd) {
+    const relativePos = selState.cursorPos - node.startPos;
+    return Math.min(Math.max(0, relativePos), node.text.length);
+  }
+  return null;
+}
+
+// Get selection range relative to node text
+function getSelectionInNode(
+  node: MindMapNode,
+  selState: SelectionState
+): { start: number; end: number } | null {
+  const { selectionStart, selectionEnd } = selState;
+  if (selectionStart === selectionEnd) return null;
+  if (selectionEnd >= node.startPos && selectionStart <= node.endPos) {
+    const start = Math.max(0, selectionStart - node.startPos);
+    const end = Math.min(node.text.length, selectionEnd - node.startPos);
+    if (start < end) return { start, end };
+  }
+  return null;
+}
+
 interface Props {
   noteId?: string;
   initialContent?: string;
@@ -160,7 +214,7 @@ export default function MindmapEditor({
     };
   }, []);
 
-  // Redraw layer when nodes change
+  // Redraw layer when nodes or selection change
   useEffect(() => {
     const Konva = konvaRef.current;
     const layer = layerRef.current;
@@ -171,7 +225,9 @@ export default function MindmapEditor({
     const nodeMap: Record<string, MindMapNode> = {};
     nodes.forEach((n) => (nodeMap[n.id] = n));
 
+    // Pre-calculate text widths and character offsets
     const textWidths = new Map<string, number>();
+    const cursorOffsets = new Map<string, number[]>();
     nodes.forEach((node) => {
       const displayText = node.text === "" ? "empty" : node.text;
       const t = new Konva.Text({
@@ -181,6 +237,20 @@ export default function MindmapEditor({
         fontStyle: node.text === "" ? "italic" : "normal",
       });
       textWidths.set(node.id, t.width());
+
+      // Calculate character offsets for cursor/selection positioning
+      if (node.text.length > 0) {
+        const offsets: number[] = [0];
+        for (let i = 0; i < node.text.length; i++) {
+          const partial = new Konva.Text({
+            text: node.text.substring(0, i + 1),
+            fontSize: 14,
+            fontFamily: "sans-serif",
+          });
+          offsets.push(partial.width());
+        }
+        cursorOffsets.set(node.id, offsets);
+      }
     });
 
     // Draw connections
@@ -205,13 +275,13 @@ export default function MindmapEditor({
     });
 
     // Draw nodes
+    const padding = 20;
     nodes.forEach((node, index) => {
       const isRoot = index === 0;
       const isEmpty = node.text === "";
       const isActive = selectionState.activeNodeId === node.id;
       const displayText = isEmpty ? "empty" : node.text;
       const textWidth = textWidths.get(node.id) || 100;
-      const padding = 20;
       const rectWidth = Math.max(textWidth + padding * 2, isRoot ? 100 : 80);
       const rectHeight = 32;
 
@@ -231,6 +301,25 @@ export default function MindmapEditor({
       });
       group.add(rect);
 
+      // Selection highlight (after background, before text)
+      const selection = getSelectionInNode(node, selectionState);
+      if (selection && node.text.length > 0) {
+        const offsets = cursorOffsets.get(node.id);
+        if (offsets) {
+          const selStartX = offsets[selection.start] || 0;
+          const selEndX = offsets[selection.end] || 0;
+          const highlight = new Konva.Rect({
+            x: node.x + padding + selStartX,
+            y: node.y - 10,
+            width: selEndX - selStartX,
+            height: 20,
+            fill: isRoot ? "rgba(255, 255, 255, 0.3)" : "rgba(0, 100, 255, 0.2)",
+            listening: false,
+          });
+          group.add(highlight);
+        }
+      }
+
       const textNode = new Konva.Text({
         x: node.x + padding,
         y: node.y - 7,
@@ -243,6 +332,23 @@ export default function MindmapEditor({
       });
       group.add(textNode);
 
+      // Cursor line
+      const cursorPos = getCursorPositionInNode(node, selectionState);
+      if (cursorPos !== null && node.text.length > 0) {
+        const offsets = cursorOffsets.get(node.id);
+        if (offsets) {
+          const cursorX = node.x + padding + (offsets[cursorPos] || 0);
+          const cursorLine = new Konva.Line({
+            points: [cursorX, node.y - 10, cursorX, node.y + 10],
+            stroke: isRoot ? "#ffffff" : "#000000",
+            strokeWidth: 2,
+            listening: false,
+          });
+          group.add(cursorLine);
+        }
+      }
+
+      // Click → jump to textarea
       group.on("click tap", () => {
         const textarea = textareaRef.current;
         if (!textarea) return;
@@ -258,29 +364,51 @@ export default function MindmapEditor({
         updateSelection();
       });
 
+      // Double-click → select node text in textarea
+      group.on("dblclick dbltap", () => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        if (node.lineNumber === 0) return;
+        textarea.focus();
+        // Select the trimmed text range (skip leading indent)
+        const textareaLineIndex = node.lineNumber - 1;
+        const lines = textarea.value.split("\n");
+        let lineStart = 0;
+        for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
+          lineStart += lines[i].length + 1;
+        }
+        const line = lines[textareaLineIndex] || "";
+        const leadingSpaces = line.length - line.trimStart().length;
+        const selStart = lineStart + leadingSpaces;
+        const selEnd = lineStart + line.length;
+        textarea.setSelectionRange(selStart, selEnd);
+        updateSelection();
+      });
+
       layer.add(group);
     });
 
     layer.draw();
-  }, [nodes, selectionState.activeNodeId]);
+  }, [nodes, selectionState]);
 
-  // Selection sync
+  // Selection sync (convert textarea positions to mindmap text positions)
   const updateSelection = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    const cursorPos = textarea.selectionStart;
-    const beforeCursor = textarea.value.substring(0, cursorPos);
+    const tPos = textarea.selectionStart;
+    const beforeCursor = textarea.value.substring(0, tPos);
     const textareaLine = beforeCursor.split("\n").length - 1;
     const mindmapLine = textareaLine + 1;
     const activeNode =
       nodes.find((n) => n.lineNumber === mindmapLine) || null;
+    const titleStr = title || "Mindmap";
     setSelectionState({
-      cursorPos,
-      selectionStart: textarea.selectionStart,
-      selectionEnd: textarea.selectionEnd,
+      cursorPos: textareaPosToMindmapPos(tPos, titleStr, text),
+      selectionStart: textareaPosToMindmapPos(textarea.selectionStart, titleStr, text),
+      selectionEnd: textareaPosToMindmapPos(textarea.selectionEnd, titleStr, text),
       activeNodeId: activeNode?.id || null,
     });
-  }, [nodes]);
+  }, [nodes, title, text]);
 
   useEffect(() => {
     const handleSelectionChange = () => updateSelection();
