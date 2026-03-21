@@ -415,23 +415,50 @@ export default function MindmapEditor({
         }
       }
 
-      // Mousedown → jump to textarea
-      group.on("mousedown touchstart", () => {
+      // Mousedown → jump to clicked character position in textarea
+      group.on("mousedown touchstart", (e: any) => {
         const textarea = textareaRef.current;
         if (!textarea) return;
         if (node.lineNumber === 0) return;
+
         const textareaLineIndex = node.lineNumber - 1;
         const lines = textarea.value.split("\n");
-        let pos = 0;
+        let lineStartPos = 0;
         for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
-          pos += lines[i].length + 1;
+          lineStartPos += lines[i].length + 1;
         }
         const line = lines[textareaLineIndex] || "";
         const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
-        // Delay focus to after mousedown completes (canvas steals focus)
+
+        // Calculate which character was clicked
+        let charIndex = node.text.length; // default: end of text
+        const offsets = cursorOffsets.get(node.id);
+        if (offsets && e.target) {
+          const stage = konvaStageRef.current;
+          if (stage) {
+            const pointer = stage.getPointerPosition();
+            if (pointer) {
+              const scale = stage.scaleX();
+              const clickX = (pointer.x - stage.x()) / scale - node.x - nodePadding;
+              // Find closest character boundary
+              let bestIdx = 0;
+              let bestDist = Math.abs(clickX);
+              for (let i = 1; i < offsets.length; i++) {
+                const dist = Math.abs(clickX - offsets[i]);
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  bestIdx = i;
+                }
+              }
+              charIndex = bestIdx;
+            }
+          }
+        }
+
+        const targetPos = lineStartPos + leadingSpaces + charIndex;
         setTimeout(() => {
           textarea.focus();
-          textarea.setSelectionRange(pos + leadingSpaces, pos + leadingSpaces);
+          textarea.setSelectionRange(targetPos, targetPos);
           updateSelection();
         }, 0);
       });
