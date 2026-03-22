@@ -1,27 +1,22 @@
-import { useState, useEffect, useRef } from "react";
-import { parseTextToNodes } from "../lib/mindmapParser";
+import { useState, useEffect, useRef, useMemo } from "react";
 import type { MindMapNode } from "../types/MindMap";
+import { layoutMindMap } from "../lib/treeLayout";
+import { parseContent, flattenToNodes } from "../lib/mindmapModel";
 
 interface Props {
   initialContent: string;
   title: string;
 }
 
-function buildMindmapText(rootTitle: string, content: string): string {
-  const lines = content.split("\n");
-  const indented = lines.map((line) => (line.trim() === "" ? "" : "  " + line));
-  return rootTitle + "\n" + indented.join("\n");
-}
-
 export default function MindmapViewer({ initialContent, title }: Props) {
-  const [nodes, setNodes] = useState<MindMapNode[]>([]);
   const canvasRef = useRef<HTMLDivElement>(null);
   const konvaStageRef = useRef<any>(null);
 
-  useEffect(() => {
-    const mindmapText = buildMindmapText(title || "Mindmap", initialContent);
-    const parsed = parseTextToNodes(mindmapText);
-    setNodes(parsed);
+  const nodes = useMemo(() => {
+    const model = parseContent(initialContent, title);
+    const flat = flattenToNodes(model);
+    if (flat.length > 0) layoutMindMap(flat);
+    return flat;
   }, [initialContent, title]);
 
   useEffect(() => {
@@ -86,7 +81,10 @@ export default function MindmapViewer({ initialContent, title }: Props) {
         const displayText = isEmpty ? "empty" : node.text;
         const textWidth = textWidths.get(node.id) || 100;
         const padding = 20;
-        const rectWidth = Math.max(textWidth + padding * 2, isRoot ? 100 : 80);
+        const rectWidth = Math.max(
+          textWidth + padding * 2,
+          isRoot ? 100 : 80
+        );
         const rectHeight = 32;
 
         const rect = new Konva.Rect({

@@ -1,77 +1,20 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { parseTextToNodes } from "../lib/mindmapParser";
-import type { MindMapNode, SelectionState } from "../types/MindMap";
-
-const DEMO_TEXT = `使い方
-  インデントで階層を作る
-  Tabでインデント追加
-  Shift+Tabでインデント削除
-特徴
-  リアルタイムプレビュー
-  テキストベース
-  シンプル`;
-
-function buildMindmapText(rootTitle: string, content: string): string {
-  const lines = content.split("\n");
-  const indented = lines.map((line) => (line.trim() === "" ? "" : "  " + line));
-  return rootTitle + "\n" + indented.join("\n");
-}
-
-// Get cursor column within node text (direct from line/col, no coordinate conversion)
-function getCursorPositionInNode(
-  node: MindMapNode,
-  selState: SelectionState
-): number | null {
-  if (selState.activeNodeId !== node.id) return null;
-  return Math.min(Math.max(0, selState.cursorCol), node.text.length);
-}
-
-// Get selection range within a node using textarea positions
-// We convert textarea positions to per-line columns for comparison
-function getSelectionInNode(
-  node: MindMapNode,
-  selState: SelectionState,
-  text: string
-): { start: number; end: number } | null {
-  const { selectionStart, selectionEnd } = selState;
-  if (selectionStart === selectionEnd) return null;
-
-  // Find textarea line range for this node (node.lineNumber is in mindmap coords, -1 for textarea)
-  const textareaLineIndex = node.lineNumber - 1;
-  if (textareaLineIndex < 0) return null;
-  const lines = text.split("\n");
-  if (textareaLineIndex >= lines.length) return null;
-
-  // Calculate line start/end positions in textarea
-  let lineStart = 0;
-  for (let i = 0; i < textareaLineIndex; i++) lineStart += lines[i].length + 1;
-  const line = lines[textareaLineIndex];
-  const lineEnd = lineStart + line.length;
-  const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
-  const textStart = lineStart + leadingSpaces;
-
-  // Check overlap
-  if (selectionEnd <= textStart || selectionStart >= lineEnd) return null;
-  const start = Math.max(0, selectionStart - textStart);
-  const end = Math.min(node.text.length, selectionEnd - textStart);
-  if (start < end) return { start, end };
-  return null;
-}
-
-// Helper: find line info at a given position
-function getLineInfo(text: string, pos: number) {
-  const lines = text.split("\n");
-  let currentPos = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (currentPos + lines[i].length >= pos) {
-      return { lineIndex: i, lineStart: currentPos, line: lines[i], posInLine: pos - currentPos, lines };
-    }
-    currentPos += lines[i].length + 1;
-  }
-  const lastIdx = lines.length - 1;
-  const lastStart = text.length - lines[lastIdx].length;
-  return { lineIndex: lastIdx, lineStart: lastStart, line: lines[lastIdx], posInLine: pos - lastStart, lines };
-}
+import type { MindMapModel, MindMapNode } from "../types/MindMap";
+import { layoutMindMap } from "../lib/treeLayout";
+import {
+  parseContent,
+  flattenToNodes,
+  getFlatOrder,
+  generateId,
+  updateNodeText,
+  addSiblingAfter,
+  removeNode,
+  indentNode,
+  dedentNode,
+  splitNode,
+  findNode,
+  findParentAndIndex,
+} from "../lib/mindmapModel";
 
 interface Props {
   noteId?: string;
@@ -86,39 +29,57 @@ export default function MindmapEditor({
   initialTitle,
   initialIsPublic,
 }: Props) {
-  const [text, setText] = useState(initialContent || DEMO_TEXT);
-  const [title, setTitle] = useState(initialTitle || "Mindmap Lite");
+  // Model state
+  const [model, setModel] = useState<MindMapModel>(() =>
+    parseContent(initialContent, initialTitle)
+  );
   const [isPublic, setIsPublic] = useState(initialIsPublic || false);
-  const [nodesVersion, setNodesVersion] = useState(0);
-  const [selectionState, setSelectionState] = useState<SelectionState>({
-    cursorLine: 0,
-    cursorCol: 0,
-    selectionStart: 0,
-    selectionEnd: 0,
-    activeNodeId: null,
-  });
+
+  // Editing state
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
+  const [cursorPos, setCursorPos] = useState(0);
+  const [selectionEnd, setSelectionEnd] = useState(0);
   const [isComposing, setIsComposing] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [cursorVisible, setCursorVisible] = useState(true);
+  const [konvaReady, setKonvaReady] = useState(false);
+  const [inputPos, setInputPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Refs
+  const inputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const konvaStageRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
+  const cursorLayerRef = useRef<any>(null);
   const konvaRef = useRef<any>(null);
   const saveTimerRef = useRef<any>(null);
   const saveStatusRef = useRef<HTMLSpanElement>(null);
-  const dragStateRef = useRef<{ anchorPos: number } | null>(null);
   const cursorOffsetsRef = useRef<Map<string, number[]>>(new Map());
-  const nodesRef = useRef<MindMapNode[]>([]);
-  const updateSelectionRef = useRef<() => void>(() => {});
+  const modelRef = useRef(model);
+  modelRef.current = model;
 
+  // Derived: flat nodes with layout
+  const nodes = useMemo(() => {
+    const flat = flattenToNodes(model);
+    if (flat.length > 0) layoutMindMap(flat);
+    return flat;
+  }, [model]);
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+
+  // Flat navigation order
+  const flatOrder = useMemo(() => getFlatOrder(model), [model]);
+
+  // Title = root node text
+  const title = model.text;
+
+  // --- Save ---
   const updateSaveStatus = useCallback((status: string) => {
-    if (saveStatusRef.current) {
-      saveStatusRef.current.textContent = status;
-    }
+    if (saveStatusRef.current) saveStatusRef.current.textContent = status;
   }, []);
 
-  // Auto-save
   const saveNote = useCallback(
-    async (content: string, noteTitle?: string, pub?: boolean) => {
+    async (currentModel: MindMapModel, pub?: boolean) => {
       if (!noteId) return;
       updateSaveStatus("保存中...");
       try {
@@ -127,8 +88,8 @@ export default function MindmapEditor({
           credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            content,
-            title: noteTitle ?? title,
+            content: JSON.stringify(currentModel),
+            title: currentModel.text,
             isPublic: pub ?? isPublic,
           }),
         });
@@ -137,35 +98,349 @@ export default function MindmapEditor({
         updateSaveStatus("保存失敗");
       }
     },
-    [noteId, title, isPublic, updateSaveStatus]
+    [noteId, isPublic, updateSaveStatus]
   );
 
   // Debounced auto-save
   useEffect(() => {
     if (!noteId) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      saveNote(text);
-    }, 1500);
+    saveTimerRef.current = setTimeout(() => saveNote(model), 1500);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [text, noteId, saveNote]);
+  }, [model, noteId, saveNote]);
 
-  // Parse text to nodes (synchronous via useMemo)
-  const nodes = useMemo(() => {
-    const rootTitle = title || "Mindmap";
-    const mindmapText = buildMindmapText(rootTitle, text);
-    return parseTextToNodes(mindmapText);
-  }, [text, title]);
-  nodesRef.current = nodes;
-
-  // Auto-focus textarea on mount
+  // --- Cursor blink ---
   useEffect(() => {
-    textareaRef.current?.focus();
+    if (!activeNodeId) return;
+    setCursorVisible(true);
+    const interval = setInterval(() => setCursorVisible((v) => !v), 530);
+    return () => clearInterval(interval);
+  }, [activeNodeId, cursorPos, editingText]);
+
+  // --- Node activation ---
+  const activateNode = useCallback(
+    (nodeId: string, cursor?: number) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      setActiveNodeId(nodeId);
+      const modelNode = findNode(model, nodeId);
+      const text = modelNode?.text || "";
+      setEditingText(text);
+      const pos = cursor ?? text.length;
+      setCursorPos(pos);
+      setSelectionEnd(pos);
+      if (inputRef.current) {
+        inputRef.current.value = text;
+        inputRef.current.setSelectionRange(pos, pos);
+        inputRef.current.focus();
+      }
+    },
+    [nodes, model]
+  );
+
+  // --- Input handling ---
+  const handleInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newText = e.target.value;
+      setEditingText(newText);
+      if (!isComposing && activeNodeId) {
+        setModel((prev) => updateNodeText(prev, activeNodeId, newText));
+      }
+      setTimeout(() => {
+        if (inputRef.current) {
+          setCursorPos(inputRef.current.selectionStart || 0);
+          setSelectionEnd(inputRef.current.selectionEnd || 0);
+        }
+      }, 0);
+    },
+    [isComposing, activeNodeId]
+  );
+
+  const handleCompositionEnd = useCallback(() => {
+    setIsComposing(false);
+    if (activeNodeId && inputRef.current) {
+      const finalText = inputRef.current.value;
+      setEditingText(finalText);
+      setModel((prev) => updateNodeText(prev, activeNodeId, finalText));
+      setTimeout(() => {
+        if (inputRef.current) {
+          setCursorPos(inputRef.current.selectionStart || 0);
+          setSelectionEnd(inputRef.current.selectionEnd || 0);
+        }
+      }, 0);
+    }
+  }, [activeNodeId]);
+
+  const handleSelect = useCallback(() => {
+    if (inputRef.current) {
+      setCursorPos(inputRef.current.selectionStart || 0);
+      setSelectionEnd(inputRef.current.selectionEnd || 0);
+    }
   }, []);
 
-  // Load Konva and create stage once
+  // --- Keyboard handling ---
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (isComposing) return;
+      if (!activeNodeId) return;
+
+      const currentModel = modelRef.current;
+      const order = getFlatOrder(currentModel);
+      const idx = order.indexOf(activeNodeId);
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const pos = inputRef.current?.selectionStart || 0;
+        const currentNode = findNode(currentModel, activeNodeId);
+        if (!currentNode) return;
+
+        if (pos >= currentNode.text.length) {
+          // At end: add empty sibling
+          const newId = generateId();
+          const newNode: MindMapModel = {
+            id: newId,
+            text: "",
+            children: [],
+          };
+          setModel((prev) => addSiblingAfter(prev, activeNodeId, newNode));
+          // Directly set state instead of activateNode (nodes not yet updated)
+          setActiveNodeId(newId);
+          setEditingText("");
+          setCursorPos(0);
+          setSelectionEnd(0);
+          setTimeout(() => {
+            if (inputRef.current) {
+              inputRef.current.focus();
+              inputRef.current.setSelectionRange(0, 0);
+            }
+          }, 0);
+        } else {
+          // Mid-text: split node
+          const textAfter = currentNode.text.substring(pos);
+          const result = splitNode(currentModel, activeNodeId, pos);
+          setModel(result.model);
+          // Directly set state instead of activateNode (nodes not yet updated)
+          setActiveNodeId(result.newNodeId);
+          setEditingText(textAfter);
+          setCursorPos(0);
+          setSelectionEnd(0);
+          setTimeout(() => {
+            if (inputRef.current) {
+              inputRef.current.focus();
+              inputRef.current.setSelectionRange(0, 0);
+            }
+          }, 0);
+        }
+        return;
+      }
+
+      if (e.key === "Tab") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          setModel((prev) => dedentNode(prev, activeNodeId));
+        } else {
+          setModel((prev) => indentNode(prev, activeNodeId));
+        }
+        setTimeout(() => {
+          if (inputRef.current) {
+            const pos = inputRef.current.selectionStart || 0;
+            setCursorPos(pos);
+            setSelectionEnd(pos);
+          }
+        }, 0);
+        return;
+      }
+
+      if (e.key === "Backspace") {
+        const pos = inputRef.current?.selectionStart || 0;
+        const selEnd = inputRef.current?.selectionEnd || 0;
+        // If there's a selection, let the default behavior handle it
+        if (pos !== selEnd) return;
+
+        if (pos === 0) {
+          e.preventDefault();
+          const currentNode = findNode(currentModel, activeNodeId);
+          if (!currentNode) return;
+
+          if (currentNode.text === "" && currentModel.id !== activeNodeId) {
+            // Empty node: delete it, move to previous
+            setModel((prev) => removeNode(prev, activeNodeId));
+            if (idx > 0) {
+              const prevId = order[idx - 1];
+              const prevNode = findNode(currentModel, prevId);
+              const prevText = prevNode?.text || "";
+              setActiveNodeId(prevId);
+              setEditingText(prevText);
+              setCursorPos(prevText.length);
+              setSelectionEnd(prevText.length);
+              setTimeout(() => {
+                if (inputRef.current) {
+                  inputRef.current.focus();
+                  inputRef.current.setSelectionRange(prevText.length, prevText.length);
+                }
+              }, 0);
+            } else {
+              setActiveNodeId(null);
+            }
+          } else if (idx > 0) {
+            // Non-empty at pos 0: merge with previous node
+            const prevId = order[idx - 1];
+            const prevNode = findNode(currentModel, prevId);
+            if (prevNode && currentModel.id !== activeNodeId) {
+              const mergePos = prevNode.text.length;
+              const mergedText = prevNode.text + currentNode.text;
+              let newModel = updateNodeText(
+                currentModel,
+                prevId,
+                mergedText
+              );
+              newModel = removeNode(newModel, activeNodeId);
+              setModel(newModel);
+              setActiveNodeId(prevId);
+              setEditingText(mergedText);
+              setCursorPos(mergePos);
+              setSelectionEnd(mergePos);
+              setTimeout(() => {
+                if (inputRef.current) {
+                  inputRef.current.focus();
+                  inputRef.current.setSelectionRange(mergePos, mergePos);
+                }
+              }, 0);
+            }
+          }
+          return;
+        }
+      }
+
+      if (e.key === "Delete") {
+        const pos = inputRef.current?.selectionStart || 0;
+        const selEnd = inputRef.current?.selectionEnd || 0;
+        if (pos !== selEnd) return;
+
+        const currentNode = findNode(currentModel, activeNodeId);
+        if (!currentNode) return;
+
+        if (pos >= currentNode.text.length && idx < order.length - 1) {
+          // At end of text: merge with next node
+          e.preventDefault();
+          const nextId = order[idx + 1];
+          const nextNode = findNode(currentModel, nextId);
+          if (nextNode) {
+            let newModel = updateNodeText(
+              currentModel,
+              activeNodeId,
+              currentNode.text + nextNode.text
+            );
+            newModel = removeNode(newModel, nextId);
+            setModel(newModel);
+            setEditingText(currentNode.text + nextNode.text);
+            setTimeout(() => {
+              if (inputRef.current) {
+                inputRef.current.setSelectionRange(pos, pos);
+                setCursorPos(pos);
+                setSelectionEnd(pos);
+              }
+            }, 0);
+          }
+          return;
+        }
+      }
+
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (idx > 0) {
+          activateNode(order[idx - 1]);
+        }
+        return;
+      }
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (idx < order.length - 1) {
+          activateNode(order[idx + 1], 0);
+        }
+        return;
+      }
+
+      if (e.key === "ArrowLeft") {
+        const pos = inputRef.current?.selectionStart || 0;
+        const selEnd = inputRef.current?.selectionEnd || 0;
+        if (e.metaKey || e.ctrlKey) {
+          e.preventDefault();
+          if (pos === 0 && idx > 0) {
+            // Already at start → jump to end of previous node
+            activateNode(order[idx - 1]);
+          } else {
+            // Jump to start of current node
+            setCursorPos(0);
+            setSelectionEnd(0);
+            if (inputRef.current) {
+              inputRef.current.setSelectionRange(0, 0);
+            }
+          }
+          return;
+        }
+        if (pos === 0 && pos === selEnd && idx > 0) {
+          e.preventDefault();
+          activateNode(order[idx - 1]);
+          return;
+        }
+      }
+
+      if (e.key === "ArrowRight") {
+        const pos = inputRef.current?.selectionEnd || 0;
+        const selStart = inputRef.current?.selectionStart || 0;
+        const currentNode = findNode(currentModel, activeNodeId);
+        if (!currentNode) return;
+        if (e.metaKey || e.ctrlKey) {
+          e.preventDefault();
+          if (pos >= currentNode.text.length && idx < order.length - 1) {
+            // Already at end → jump to start of next node
+            activateNode(order[idx + 1], 0);
+          } else {
+            // Jump to end of current node
+            const endPos = currentNode.text.length;
+            setCursorPos(endPos);
+            setSelectionEnd(endPos);
+            if (inputRef.current) {
+              inputRef.current.setSelectionRange(endPos, endPos);
+            }
+          }
+          return;
+        }
+        if (
+          pos >= currentNode.text.length &&
+          pos === selStart &&
+          idx < order.length - 1
+        ) {
+          e.preventDefault();
+          activateNode(order[idx + 1], 0);
+          return;
+        }
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setActiveNodeId(null);
+        inputRef.current?.blur();
+        return;
+      }
+    },
+    [isComposing, activeNodeId, activateNode]
+  );
+
+  // --- Title editing ---
+  const handleTitleChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newTitle = e.target.value;
+      setModel((prev) => updateNodeText(prev, prev.id, newTitle));
+    },
+    []
+  );
+
+  // --- Konva setup ---
   useEffect(() => {
     if (!canvasRef.current) return;
     const container = canvasRef.current;
@@ -186,6 +461,11 @@ export default function MindmapEditor({
       stage.add(layer);
       layerRef.current = layer;
 
+      const cursorLayer = new Konva.Layer();
+      stage.add(cursorLayer);
+      cursorLayerRef.current = cursorLayer;
+
+      // Zoom
       stage.on("wheel", (e: any) => {
         e.evt.preventDefault();
         const oldScale = stage.scaleX();
@@ -207,66 +487,10 @@ export default function MindmapEditor({
         layer.draw();
       });
 
-      // Drag selection on stage
-      stage.on("mousemove touchmove", () => {
-        const drag = dragStateRef.current;
-        if (!drag) return;
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-
-        const pointer = stage.getPointerPosition();
-        if (!pointer) return;
-        const scale = stage.scaleX();
-        const worldX = (pointer.x - stage.x()) / scale;
-        const worldY = (pointer.y - stage.y()) / scale;
-
-        // Find closest node by Y coordinate
-        const currentNodes = nodesRef.current;
-        let closestNode: MindMapNode | null = null;
-        let closestDist = Infinity;
-        for (const n of currentNodes) {
-          if (n.lineNumber === 0) continue;
-          const dist = Math.abs(n.y - worldY);
-          if (dist < closestDist) {
-            closestDist = dist;
-            closestNode = n;
-          }
-        }
-        if (!closestNode) return;
-
-        const offsets = cursorOffsetsRef.current.get(closestNode.id);
-        let charIdx = closestNode.text.length;
-        if (offsets) {
-          const relX = worldX - closestNode.x - 20; // 20 = nodePadding
-          let bestIdx = 0;
-          let bestDist2 = Math.abs(relX);
-          for (let i = 1; i < offsets.length; i++) {
-            const d = Math.abs(relX - offsets[i]);
-            if (d < bestDist2) { bestDist2 = d; bestIdx = i; }
-          }
-          charIdx = bestIdx;
-        }
-
-        const textareaLineIndex = closestNode.lineNumber - 1;
-        const lines = textarea.value.split("\n");
-        let lineStart = 0;
-        for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
-          lineStart += lines[i].length + 1;
-        }
-        const line = lines[textareaLineIndex] || "";
-        const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
-        const currentPos = lineStart + leadingSpaces + charIdx;
-
-        const start = Math.min(drag.anchorPos, currentPos);
-        const end = Math.max(drag.anchorPos, currentPos);
-        textarea.setSelectionRange(start, end);
-        updateSelectionRef.current();
-      });
-
-      stage.on("mouseup touchend", () => {
-        if (dragStateRef.current) {
-          dragStateRef.current = null;
-          stage.draggable(true);
+      // Click on empty space → deselect
+      stage.on("click tap", (e: any) => {
+        if (e.target === stage) {
+          setActiveNodeId(null);
         }
       });
 
@@ -277,8 +501,8 @@ export default function MindmapEditor({
       });
       resizeObserver.observe(container);
 
-      // Trigger initial draw
-      setNodesVersion((v) => v + 1);
+      // Signal that Konva is ready so the redraw effect can fire
+      setKonvaReady(true);
     });
 
     return () => {
@@ -286,16 +510,17 @@ export default function MindmapEditor({
         konvaStageRef.current.destroy();
         konvaStageRef.current = null;
         layerRef.current = null;
+        cursorLayerRef.current = null;
       }
     };
   }, []);
 
-  // Auto-scroll to active node
+  // --- Auto-scroll to active node ---
   useEffect(() => {
     const stage = konvaStageRef.current;
-    if (!stage || !selectionState.activeNodeId) return;
+    if (!stage || !activeNodeId) return;
 
-    const activeNode = nodes.find((n) => n.id === selectionState.activeNodeId);
+    const activeNode = nodes.find((n) => n.id === activeNodeId);
     if (!activeNode) return;
 
     const scale = stage.scaleX();
@@ -329,16 +554,36 @@ export default function MindmapEditor({
       if (nodeScreenY < padding) {
         targetY = padding - (activeNode.y - nodeHeight / 2) * scale;
       } else if (nodeScreenY + nodeScreenHeight > stageHeight - padding) {
-        targetY = stageHeight - padding - (activeNode.y + nodeHeight / 2) * scale;
+        targetY =
+          stageHeight - padding - (activeNode.y + nodeHeight / 2) * scale;
       }
 
       stage.x(targetX);
       stage.y(targetY);
       layerRef.current?.draw();
     }
-  }, [selectionState.activeNodeId, nodes]);
+  }, [activeNodeId, nodes]);
 
-  // Redraw layer when nodes or selection change
+  // --- Position hidden input at active node for IME ---
+  useEffect(() => {
+    const stage = konvaStageRef.current;
+    if (!stage || !activeNodeId) {
+      setInputPos({ x: 0, y: 0 });
+      return;
+    }
+    const activeNode = nodes.find((n) => n.id === activeNodeId);
+    if (!activeNode) return;
+
+    const scale = stage.scaleX();
+    const offsets = cursorOffsetsRef.current.get(activeNodeId);
+    const cursorX = offsets?.[cursorPos] || 0;
+
+    const screenX = (activeNode.x + 20 + cursorX) * scale + stage.x();
+    const screenY = activeNode.y * scale + stage.y();
+    setInputPos({ x: screenX, y: screenY });
+  }, [activeNodeId, nodes, cursorPos, editingText]);
+
+  // --- Redraw canvas ---
   useEffect(() => {
     const Konva = konvaRef.current;
     const layer = layerRef.current;
@@ -352,21 +597,28 @@ export default function MindmapEditor({
     // Pre-calculate text widths and character offsets
     const textWidths = new Map<string, number>();
     const cursorOffsets = new Map<string, number[]>();
+    const nodePadding = 20;
+
     nodes.forEach((node) => {
-      const displayText = node.text === "" ? "empty" : node.text;
+      // For active node during editing, use editingText
+      const displayRaw =
+        activeNodeId === node.id ? editingText : node.text;
+      const isEmpty = displayRaw === "";
+      const displayText = isEmpty ? "empty" : displayRaw;
+
       const t = new Konva.Text({
         text: displayText,
         fontSize: 14,
         fontFamily: "sans-serif",
-        fontStyle: node.text === "" ? "italic" : "normal",
+        fontStyle: isEmpty ? "italic" : "normal",
       });
       textWidths.set(node.id, t.width());
 
-      if (node.text.length > 0) {
+      if (displayRaw.length > 0) {
         const offsets: number[] = [0];
-        for (let i = 0; i < node.text.length; i++) {
+        for (let i = 0; i < displayRaw.length; i++) {
           const partial = new Konva.Text({
-            text: node.text.substring(0, i + 1),
+            text: displayRaw.substring(0, i + 1),
             fontSize: 14,
             fontFamily: "sans-serif",
           });
@@ -375,7 +627,6 @@ export default function MindmapEditor({
         cursorOffsets.set(node.id, offsets);
       }
     });
-    // Keep ref in sync for drag handler
     cursorOffsetsRef.current = cursorOffsets;
 
     // Draw connections
@@ -400,14 +651,18 @@ export default function MindmapEditor({
     });
 
     // Draw nodes
-    const nodePadding = 20;
     nodes.forEach((node, index) => {
       const isRoot = index === 0;
-      const isEmpty = node.text === "";
-      const isActive = selectionState.activeNodeId === node.id;
-      const displayText = isEmpty ? "empty" : node.text;
+      const displayRaw =
+        activeNodeId === node.id ? editingText : node.text;
+      const isEmpty = displayRaw === "";
+      const isActive = activeNodeId === node.id;
+      const displayText = isEmpty ? "empty" : displayRaw;
       const textWidth = textWidths.get(node.id) || 100;
-      const rectWidth = Math.max(textWidth + nodePadding * 2, isRoot ? 100 : 80);
+      const rectWidth = Math.max(
+        textWidth + nodePadding * 2,
+        isRoot ? 100 : 80
+      );
       const rectHeight = 32;
 
       const group = new Konva.Group();
@@ -419,31 +674,18 @@ export default function MindmapEditor({
         height: rectHeight,
         cornerRadius: 4,
         fill: isActive
-          ? isRoot ? "#333333" : "#f0f0f0"
-          : isRoot ? "#000000" : isEmpty ? "#fafafa" : "#ffffff",
+          ? isRoot
+            ? "#333333"
+            : "#f0f0f0"
+          : isRoot
+            ? "#000000"
+            : isEmpty
+              ? "#fafafa"
+              : "#ffffff",
         stroke: isActive ? "#000000" : isRoot ? "#000000" : "#808080",
         strokeWidth: isActive ? 2 : 1,
       });
       group.add(rect);
-
-      // Selection highlight
-      const selection = getSelectionInNode(node, selectionState, text);
-      if (selection && node.text.length > 0) {
-        const offsets = cursorOffsets.get(node.id);
-        if (offsets) {
-          const selStartX = offsets[selection.start] || 0;
-          const selEndX = offsets[selection.end] || 0;
-          const highlight = new Konva.Rect({
-            x: node.x + nodePadding + selStartX,
-            y: node.y - 10,
-            width: selEndX - selStartX,
-            height: 20,
-            fill: isRoot ? "rgba(255, 255, 255, 0.3)" : "rgba(0, 100, 255, 0.2)",
-            listening: false,
-          });
-          group.add(highlight);
-        }
-      }
 
       const textNode = new Konva.Text({
         x: node.x + nodePadding,
@@ -457,447 +699,182 @@ export default function MindmapEditor({
       });
       group.add(textNode);
 
-      // Cursor line
-      const cursorPos = getCursorPositionInNode(node, selectionState);
-      if (cursorPos !== null) {
-        const offsets = cursorOffsets.get(node.id);
-        const cursorX = node.x + nodePadding + (offsets?.[cursorPos] || 0);
-        const cursorLine = new Konva.Line({
-          points: [cursorX, node.y - 10, cursorX, node.y + 10],
-          stroke: isRoot ? "#ffffff" : "#000000",
-          strokeWidth: 2,
-          listening: false,
-        });
-        group.add(cursorLine);
-      }
-
-      // Mousedown → jump to clicked character position in textarea
+      // Click → activate node
       group.on("mousedown touchstart", (e: any) => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-        if (node.lineNumber === 0) return;
+        e.cancelBubble = true;
+        const stage = konvaStageRef.current;
+        if (!stage) return;
+        const pointer = stage.getPointerPosition();
+        if (!pointer) return;
 
-        const textareaLineIndex = node.lineNumber - 1;
-        const lines = textarea.value.split("\n");
-        let lineStartPos = 0;
-        for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
-          lineStartPos += lines[i].length + 1;
-        }
-        const line = lines[textareaLineIndex] || "";
-        const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
+        const scale = stage.scaleX();
+        const clickX =
+          (pointer.x - stage.x()) / scale - node.x - nodePadding;
 
-        // Calculate which character was clicked
-        let charIndex = node.text.length; // default: end of text
+        // Find closest character position
         const offsets = cursorOffsets.get(node.id);
-        if (offsets && e.target) {
-          const stage = konvaStageRef.current;
-          if (stage) {
-            const pointer = stage.getPointerPosition();
-            if (pointer) {
-              const scale = stage.scaleX();
-              const clickX = (pointer.x - stage.x()) / scale - node.x - nodePadding;
-              // Find closest character boundary
-              let bestIdx = 0;
-              let bestDist = Math.abs(clickX);
-              for (let i = 1; i < offsets.length; i++) {
-                const dist = Math.abs(clickX - offsets[i]);
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  bestIdx = i;
-                }
-              }
-              charIndex = bestIdx;
+        let charIdx = displayRaw.length;
+        if (offsets) {
+          let bestIdx = 0;
+          let bestDist = Math.abs(clickX);
+          for (let i = 1; i < offsets.length; i++) {
+            const dist = Math.abs(clickX - offsets[i]);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestIdx = i;
             }
           }
+          charIdx = bestIdx;
         }
 
-        const targetPos = lineStartPos + leadingSpaces + charIndex;
-        // Start drag selection
-        dragStateRef.current = { anchorPos: targetPos };
-        const stage = konvaStageRef.current;
-        if (stage) stage.draggable(false);
-
+        setActiveNodeId(node.id);
+        const modelNode = findNode(modelRef.current, node.id);
+        setEditingText(modelNode?.text || "");
+        setCursorPos(charIdx);
+        setSelectionEnd(charIdx);
         setTimeout(() => {
-          textarea.focus();
-          textarea.setSelectionRange(targetPos, targetPos);
-          updateSelection();
+          if (inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.setSelectionRange(charIdx, charIdx);
+          }
         }, 0);
       });
 
-      // Double-click → select node text in textarea
+      // Double-click → select all text
       group.on("dblclick dbltap", () => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-        if (node.lineNumber === 0) return;
-        textarea.focus();
-        const textareaLineIndex = node.lineNumber - 1;
-        const lines = textarea.value.split("\n");
-        let lineStart = 0;
-        for (let i = 0; i < textareaLineIndex && i < lines.length; i++) {
-          lineStart += lines[i].length + 1;
-        }
-        const line = lines[textareaLineIndex] || "";
-        const leadingSpaces = line.length - line.trimStart().length;
-        textarea.setSelectionRange(lineStart + leadingSpaces, lineStart + line.length);
-        updateSelection();
+        const modelNode = findNode(modelRef.current, node.id);
+        if (!modelNode) return;
+        setActiveNodeId(node.id);
+        setEditingText(modelNode.text);
+        setCursorPos(0);
+        setSelectionEnd(modelNode.text.length);
+        setTimeout(() => {
+          if (inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.setSelectionRange(0, modelNode.text.length);
+          }
+        }, 0);
       });
 
       layer.add(group);
     });
 
     layer.draw();
-  }, [nodes, selectionState, nodesVersion]);
+  }, [nodes, activeNodeId, editingText, konvaReady]);
 
-  // Selection sync: compute line/col directly from textarea
-  const updateSelection = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    // Cursor is at the moving end of the selection
-    const tPos = textarea.selectionDirection === "forward"
-      ? textarea.selectionEnd
-      : textarea.selectionStart;
-    const val = textarea.value;
-    const beforeCursor = val.substring(0, tPos);
-    const textareaLine = beforeCursor.split("\n").length - 1;
-    const mindmapLine = textareaLine + 1;
-    const activeNode =
-      nodes.find((n) => n.lineNumber === mindmapLine) || null;
-
-    // Calculate column within node text (after leading spaces)
-    const lines = val.split("\n");
-    const line = lines[textareaLine] || "";
-    const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
-    let lineStart = 0;
-    for (let i = 0; i < textareaLine; i++) lineStart += lines[i].length + 1;
-    const colInLine = tPos - lineStart;
-    const cursorCol = Math.max(0, colInLine - leadingSpaces);
-
-    setSelectionState({
-      cursorLine: mindmapLine,
-      cursorCol,
-      selectionStart: textarea.selectionStart,
-      selectionEnd: textarea.selectionEnd,
-      activeNodeId: activeNode?.id || null,
-    });
-  }, [nodes]);
-  updateSelectionRef.current = updateSelection;
-
+  // --- Cursor layer (lightweight, redraws only on cursor changes) ---
   useEffect(() => {
-    const handleSelectionChange = () => updateSelection();
-    document.addEventListener("selectionchange", handleSelectionChange);
-    return () =>
-      document.removeEventListener("selectionchange", handleSelectionChange);
-  }, [updateSelection]);
-
-  // Click handler: skip leading spaces
-  const handleClick = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const { selectionStart, selectionEnd } = textarea;
-    if (selectionStart !== selectionEnd) return;
-
-    const { lineStart, line } = getLineInfo(text, selectionStart);
-    const posInLine = selectionStart - lineStart;
-    const leadingSpaces = line.match(/^(\s*)/)?.[1]?.length || 0;
-
-    if (leadingSpaces > 0 && posInLine > 0 && posInLine <= leadingSpaces) {
-      const newPos = lineStart + leadingSpaces;
-      setTimeout(() => textarea.setSelectionRange(newPos, newPos), 0);
-    }
-  }, [text]);
-
-  // Keyboard handling
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const textarea = e.currentTarget;
-    const { selectionStart, selectionEnd } = textarea;
-
-    // Enter: auto-indent (skip during IME)
-    if (e.key === "Enter" && !isComposing && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      const { line, lineStart } = getLineInfo(text, selectionStart);
-      const indent = line.match(/^(\s*)/)?.[1] || "";
-      const posInLine = selectionStart - lineStart;
-      const isAtEnd = posInLine >= line.length;
-
-      if (isAtEnd) {
-        const insertion = "\n" + indent;
-        const newValue = text.substring(0, selectionStart) + insertion + text.substring(selectionEnd);
-        setText(newValue);
-        setTimeout(() => {
-          textarea.setSelectionRange(selectionStart + insertion.length, selectionStart + insertion.length);
-        }, 0);
-      } else {
-        // Mid-line: trim leading spaces from text flowing to next line
-        const textAfter = line.substring(posInLine).trimStart();
-        const newValue = text.substring(0, selectionStart) + "\n" + indent + textAfter + text.substring(lineStart + line.length);
-        setText(newValue);
-        setTimeout(() => {
-          const newPos = selectionStart + 1 + indent.length;
-          textarea.setSelectionRange(newPos, newPos);
-        }, 0);
+    const Konva = konvaRef.current;
+    const cursorLayer = cursorLayerRef.current;
+    if (!Konva || !cursorLayer || !activeNodeId) {
+      if (cursorLayer) {
+        cursorLayer.destroyChildren();
+        cursorLayer.draw();
       }
       return;
     }
 
-    // Backspace: smart indent handling
-    if (e.key === "Backspace" && selectionStart === selectionEnd) {
-      const { lineIndex, lineStart, line, posInLine, lines } = getLineInfo(text, selectionStart);
-      const leadingSpaces = line.match(/^(\s*)/)?.[1] || "";
+    cursorLayer.destroyChildren();
 
-      // At line start: merge with previous line, stripping indent
-      if (posInLine === 0 && lineIndex > 0) {
-        const trimmed = line.trimStart();
-        if (trimmed.length > 0 && line !== trimmed) {
-          e.preventDefault();
-          const prevLineEnd = lineStart - 1;
-          const newValue = text.substring(0, prevLineEnd) + trimmed + text.substring(lineStart + line.length);
-          setText(newValue);
-          setTimeout(() => textarea.setSelectionRange(prevLineEnd, prevLineEnd), 0);
-          return;
-        }
-      }
+    const activeNode = nodes.find((n) => n.id === activeNodeId);
+    if (!activeNode) return;
 
-      // At first non-space char: merge with previous line
-      if (posInLine > 0 && posInLine === leadingSpaces.length && leadingSpaces.length > 0 && lineIndex > 0) {
-        e.preventDefault();
-        const prevLineEnd = lineStart - 1;
-        const trimmed = line.trimStart();
-        const newValue = text.substring(0, prevLineEnd) + trimmed + text.substring(lineStart + line.length);
-        setText(newValue);
-        setTimeout(() => textarea.setSelectionRange(prevLineEnd, prevLineEnd), 0);
-        return;
-      }
+    const isRoot = nodes.indexOf(activeNode) === 0;
+    const nodePadding = 20;
+    const offsets = cursorOffsetsRef.current.get(activeNodeId);
 
-      // Whitespace-only line: delete entire line
-      if (line.trim() === "" && line.length > 0 && posInLine === line.length) {
-        e.preventDefault();
-        if (lineIndex > 0) {
-          const prevLineEnd = lineStart - 1;
-          const newValue = text.substring(0, lineStart - 1) + text.substring(lineStart + line.length);
-          setText(newValue);
-          setTimeout(() => textarea.setSelectionRange(prevLineEnd, prevLineEnd), 0);
-        } else if (lineIndex < lines.length - 1) {
-          const newValue = text.substring(lineStart + line.length + 1);
-          setText(newValue);
-          setTimeout(() => textarea.setSelectionRange(0, 0), 0);
-        } else {
-          setText("");
-        }
-        return;
-      }
-
-      // Would result in whitespace-only line: delete entire line
-      if (posInLine > 0) {
-        const simulated = text.substring(0, selectionStart - 1) + text.substring(selectionStart);
-        const simLines = simulated.split("\n");
-        const simLine = simLines[lineIndex];
-        if (simLine && simLine.trim() === "" && simLine.length > 0) {
-          e.preventDefault();
-          if (lineIndex > 0) {
-            const prevLineEnd = lineStart - 1;
-            const newValue = text.substring(0, lineStart - 1) + text.substring(lineStart + line.length);
-            setText(newValue);
-            setTimeout(() => textarea.setSelectionRange(prevLineEnd, prevLineEnd), 0);
-          } else if (lineIndex < lines.length - 1) {
-            const newValue = text.substring(lineStart + line.length + 1);
-            setText(newValue);
-            setTimeout(() => textarea.setSelectionRange(0, 0), 0);
-          } else {
-            setText("");
-          }
-          return;
-        }
+    // Selection highlight
+    if (cursorPos !== selectionEnd) {
+      const selStart = Math.min(cursorPos, selectionEnd);
+      const selEndPos = Math.max(cursorPos, selectionEnd);
+      const selStartX = offsets?.[selStart] || 0;
+      const selEndX = offsets?.[selEndPos] || 0;
+      if (selEndX > selStartX) {
+        const highlight = new Konva.Rect({
+          x: activeNode.x + nodePadding + selStartX,
+          y: activeNode.y - 10,
+          width: selEndX - selStartX,
+          height: 20,
+          fill: isRoot
+            ? "rgba(255, 255, 255, 0.3)"
+            : "rgba(0, 100, 255, 0.2)",
+          listening: false,
+        });
+        cursorLayer.add(highlight);
       }
     }
 
-    // Arrow keys with indent skip
-    if ((e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
-      // Let default handle Shift+Up/Down (selection, without Cmd)
-      if (e.shiftKey && !e.metaKey && !e.ctrlKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) return;
-      // Let default handle extending selection with Shift+Left/Right (without Cmd)
-      if (e.shiftKey && !e.metaKey && !e.ctrlKey && (e.key === "ArrowLeft" || e.key === "ArrowRight") && selectionStart !== selectionEnd) return;
-
-      const lines = text.split("\n");
-      const refPos = (e.key === "ArrowRight" || e.key === "ArrowDown") ? selectionEnd : selectionStart;
-      let currentPos = 0;
-      let lineIndex = 0;
-      for (let i = 0; i < lines.length; i++) {
-        if (currentPos + lines[i].length >= refPos) {
-          lineIndex = i;
-          break;
-        }
-        currentPos += lines[i].length + 1;
-      }
-      const currentLine = lines[lineIndex];
-      const leadingSpaces = currentLine.match(/^(\s*)/)?.[1]?.length || 0;
-      const posInLine = refPos - currentPos;
-
-      if (e.key === "ArrowLeft") {
-        if (e.metaKey || e.ctrlKey) {
-          e.preventDefault();
-          let targetPos: number;
-          if (posInLine <= leadingSpaces && lineIndex > 0) {
-            targetPos = currentPos - 1;
-          } else {
-            targetPos = currentPos + leadingSpaces;
-          }
-          if (e.shiftKey) {
-            // Extend selection: anchor is the other end
-            const anchor = selectionEnd;
-            textarea.setSelectionRange(Math.min(targetPos, anchor), Math.max(targetPos, anchor));
-            // Preserve direction so further shifts work
-            if (targetPos < anchor) {
-              textarea.selectionDirection = "backward";
-            }
-          } else {
-            textarea.setSelectionRange(targetPos, targetPos);
-          }
-          return;
-        } else {
-          // At first non-space char → jump to prev line end
-          if (leadingSpaces > 0 && posInLine === leadingSpaces && selectionStart === selectionEnd && lineIndex > 0) {
-            e.preventDefault();
-            textarea.setSelectionRange(currentPos - 1, currentPos - 1);
-            return;
-          }
-        }
-      } else if (e.key === "ArrowRight") {
-        if (e.metaKey || e.ctrlKey) {
-          e.preventDefault();
-          let targetPos: number;
-          if (posInLine >= currentLine.length && lineIndex < lines.length - 1) {
-            const nextLine = lines[lineIndex + 1];
-            const nextSpaces = nextLine.match(/^(\s*)/)?.[1]?.length || 0;
-            targetPos = currentPos + currentLine.length + 1 + nextSpaces;
-          } else {
-            // Jump to end of line (default Cmd+Right behavior)
-            targetPos = currentPos + currentLine.length;
-          }
-          if (e.shiftKey) {
-            const anchor = selectionStart;
-            textarea.setSelectionRange(Math.min(targetPos, anchor), Math.max(targetPos, anchor));
-            if (targetPos > anchor) {
-              textarea.selectionDirection = "forward";
-            }
-          } else {
-            textarea.setSelectionRange(targetPos, targetPos);
-          }
-          return;
-        } else {
-          // At line end → skip indent of next line
-          if (posInLine === currentLine.length && lineIndex < lines.length - 1 && selectionStart === selectionEnd) {
-            const nextLine = lines[lineIndex + 1];
-            const nextSpaces = nextLine.match(/^(\s*)/)?.[1]?.length || 0;
-            if (nextSpaces > 0) {
-              e.preventDefault();
-              const targetPos = currentPos + currentLine.length + 1 + nextSpaces;
-              textarea.setSelectionRange(targetPos, targetPos);
-              return;
-            }
-          }
-        }
-      } else if (e.key === "ArrowUp") {
-        if (lineIndex > 0) {
-          e.preventDefault();
-          const prevLine = lines[lineIndex - 1];
-          const prevSpaces = prevLine.match(/^(\s*)/)?.[1]?.length || 0;
-          let prevLineStart = 0;
-          for (let i = 0; i < lineIndex - 1; i++) prevLineStart += lines[i].length + 1;
-          textarea.setSelectionRange(prevLineStart + prevSpaces, prevLineStart + prevSpaces);
-          return;
-        }
-      } else if (e.key === "ArrowDown") {
-        if (lineIndex < lines.length - 1) {
-          e.preventDefault();
-          const nextLine = lines[lineIndex + 1];
-          const nextSpaces = nextLine.match(/^(\s*)/)?.[1]?.length || 0;
-          let nextLineStart = 0;
-          for (let i = 0; i <= lineIndex; i++) nextLineStart += lines[i].length + 1;
-          textarea.setSelectionRange(nextLineStart + nextSpaces, nextLineStart + nextSpaces);
-          return;
-        }
-      }
+    // Cursor line
+    if (cursorVisible && cursorPos === selectionEnd) {
+      const cursorX =
+        activeNode.x + nodePadding + (offsets?.[cursorPos] || 0);
+      const line = new Konva.Line({
+        points: [cursorX, activeNode.y - 10, cursorX, activeNode.y + 10],
+        stroke: isRoot ? "#ffffff" : "#000000",
+        strokeWidth: 2,
+        listening: false,
+      });
+      cursorLayer.add(line);
     }
 
-    // Tab: indent/dedent
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const currentValue = textarea.value;
-      const lines = currentValue.split("\n");
-      let pos = 0;
-      let lineIndex = 0;
-      for (let i = 0; i < lines.length; i++) {
-        if (pos + lines[i].length >= selectionStart) {
-          lineIndex = i;
-          break;
-        }
-        pos += lines[i].length + 1;
-      }
-
-      if (e.shiftKey) {
-        if (lines[lineIndex].startsWith("  ")) {
-          lines[lineIndex] = lines[lineIndex].substring(2);
-          const newText = lines.join("\n");
-          setText(newText);
-          const newPos = Math.max(0, selectionStart - 2);
-          setTimeout(() => textarea.setSelectionRange(newPos, newPos), 0);
-        }
-      } else {
-        lines[lineIndex] = "  " + lines[lineIndex];
-        const newText = lines.join("\n");
-        setText(newText);
-        const newPos = selectionStart + 2;
-        setTimeout(() => textarea.setSelectionRange(newPos, newPos), 0);
-      }
-      return;
-    }
-  };
+    cursorLayer.draw();
+  }, [activeNodeId, cursorPos, selectionEnd, cursorVisible, nodes]);
 
   return (
-    <div className="flex h-full">
-      <div className="w-1/3 border-r flex flex-col">
-        <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50">
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onBlur={() => noteId && saveNote(text)}
-            className="flex-1 min-w-0 text-sm px-2 py-1 border rounded font-semibold"
-            placeholder="タイトル（ルートノード）"
-          />
-          {noteId && (
-            <>
-              <label className="flex items-center gap-1 text-xs whitespace-nowrap">
-                <input
-                  type="checkbox"
-                  checked={isPublic}
-                  onChange={(e) => {
-                    const newVal = e.target.checked;
-                    setIsPublic(newVal);
-                    saveNote(text, undefined, newVal);
-                  }}
-                />
-                公開
-              </label>
-              <span ref={saveStatusRef} className="text-xs text-gray-400 whitespace-nowrap" />
-            </>
-          )}
-        </div>
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50">
+        <input
+          type="text"
+          value={title}
+          onChange={handleTitleChange}
+          onBlur={() => noteId && saveNote(model)}
+          className="flex-1 min-w-0 text-sm px-2 py-1 border rounded font-semibold"
+          placeholder="タイトル（ルートノード）"
+        />
+        {noteId && (
+          <>
+            <label className="flex items-center gap-1 text-xs whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={isPublic}
+                onChange={(e) => {
+                  const newVal = e.target.checked;
+                  setIsPublic(newVal);
+                  saveNote(model, newVal);
+                }}
+              />
+              公開
+            </label>
+            <span
+              ref={saveStatusRef}
+              className="text-xs text-gray-400 whitespace-nowrap"
+            />
+          </>
+        )}
+      </div>
+      <div className="flex-1 relative overflow-hidden">
+        <div ref={canvasRef} className="absolute inset-0" />
+        <input
+          ref={inputRef}
+          value={editingText}
+          onChange={handleInputChange}
           onKeyDown={handleKeyDown}
-          onClick={handleClick}
-          onMouseUp={updateSelection}
+          onSelect={handleSelect}
           onCompositionStart={() => setIsComposing(true)}
-          onCompositionEnd={() => setIsComposing(false)}
-          className="flex-1 p-4 font-mono text-sm resize-none outline-none bg-white"
-          placeholder="インデントで階層を作成..."
-          spellCheck={false}
+          onCompositionEnd={handleCompositionEnd}
+          style={{
+            position: "absolute",
+            left: `${inputPos.x}px`,
+            top: `${inputPos.y}px`,
+            width: "1px",
+            height: "1px",
+            opacity: 0,
+            pointerEvents: "none",
+            caretColor: "transparent",
+            fontSize: "14px",
+          }}
         />
       </div>
-      <div ref={canvasRef} className="flex-1 bg-white overflow-hidden" />
     </div>
   );
 }
