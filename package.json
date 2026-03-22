@@ -9,8 +9,7 @@
     "deploy": "pnpm run build && cd api && pnpm run deploy",
     "migrate": "cd api && pnpm run migrate",
     "migrate:remote": "cd api && pnpm run migrate:remote",
-    "generate": "drizzle-kit generate",
-    "install:all": "cd api && pnpm install && cd ../web && pnpm install"
+    "generate": "drizzle-kit generate"
   },
   "private": true,
   "devDependencies": {
