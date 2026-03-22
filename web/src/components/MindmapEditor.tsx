@@ -1,20 +1,24 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import type { MindMapModel, MindMapNode } from "../types/MindMap";
+import type { MindMapNode } from "../types/MindMap";
+import type { MindMapModel } from "../domain/model";
+import { findNode, updateNodeText } from "../domain/model";
 import { layoutMindMap } from "../lib/treeLayout";
+import { flattenToNodes } from "../application/nodeUtils";
+import { parseContent, serializeModel } from "../application/persistence";
 import {
-  parseContent,
-  flattenToNodes,
-  getFlatOrder,
-  generateId,
-  updateNodeText,
-  addSiblingAfter,
-  removeNode,
-  indentNode,
-  dedentNode,
-  splitNode,
-  findNode,
-  findParentAndIndex,
-} from "../lib/mindmapModel";
+  handleEnter,
+  handleTab,
+  handleBackspaceAtStart,
+  handleDeleteAtEnd,
+  handleArrowUp,
+  handleArrowDown,
+  handleCmdLeft,
+  handleCmdRight,
+  handleArrowLeftEdge,
+  handleArrowRightEdge,
+  type EditorState,
+  type StateUpdate,
+} from "../application/editorActions";
 
 interface Props {
   noteId?: string;
@@ -67,9 +71,6 @@ export default function MindmapEditor({
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
 
-  // Flat navigation order
-  const flatOrder = useMemo(() => getFlatOrder(model), [model]);
-
   // Title = root node text
   const title = model.text;
 
@@ -88,7 +89,7 @@ export default function MindmapEditor({
           credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            content: JSON.stringify(currentModel),
+            content: serializeModel(currentModel),
             title: currentModel.text,
             isPublic: pub ?? isPublic,
           }),
@@ -119,25 +120,89 @@ export default function MindmapEditor({
     return () => clearInterval(interval);
   }, [activeNodeId, cursorPos, editingText]);
 
-  // --- Node activation ---
+  // --- Build current editor state for action functions ---
+  const getEditorState = useCallback(
+    (): EditorState => ({
+      model: modelRef.current,
+      activeNodeId,
+      editingText,
+      cursorPos,
+      selectionEnd,
+    }),
+    [activeNodeId, editingText, cursorPos, selectionEnd]
+  );
+
+  // --- Apply state update from an action ---
+  const applyUpdate = useCallback(
+    (update: StateUpdate) => {
+      if (!update) return false;
+      if (update.model !== undefined) setModel(update.model);
+      // For node changes, resolve the text from the new model
+      const targetNodeId =
+        update.activeNodeId !== undefined
+          ? update.activeNodeId
+          : activeNodeId;
+      if (update.activeNodeId !== undefined) {
+        setActiveNodeId(update.activeNodeId);
+        if (update.editingText === undefined && update.activeNodeId) {
+          // Changing active node without explicit text: resolve from model
+          const m = update.model ?? modelRef.current;
+          const node = findNode(m, update.activeNodeId);
+          const text = node?.text || "";
+          setEditingText(text);
+          // Default cursor to end of text
+          const pos = update.cursorPos ?? text.length;
+          setCursorPos(pos);
+          setSelectionEnd(update.selectionEnd ?? pos);
+          if (inputRef.current) {
+            inputRef.current.value = text;
+            inputRef.current.setSelectionRange(pos, update.selectionEnd ?? pos);
+            inputRef.current.focus();
+          }
+          return true;
+        }
+      }
+      if (update.editingText !== undefined) setEditingText(update.editingText);
+      if (update.cursorPos !== undefined) setCursorPos(update.cursorPos);
+      if (update.selectionEnd !== undefined)
+        setSelectionEnd(update.selectionEnd);
+      // Sync hidden input
+      if (
+        update.editingText !== undefined ||
+        update.cursorPos !== undefined ||
+        update.activeNodeId !== undefined
+      ) {
+        const text =
+          update.editingText ?? editingText;
+        const pos = update.cursorPos ?? cursorPos;
+        const sel = update.selectionEnd ?? pos;
+        if (inputRef.current) {
+          inputRef.current.value = text;
+          inputRef.current.setSelectionRange(pos, sel);
+          inputRef.current.focus();
+        }
+      }
+      return true;
+    },
+    [activeNodeId, editingText, cursorPos]
+  );
+
+  // --- Node activation (for click/dblclick) ---
   const activateNode = useCallback(
     (nodeId: string, cursor?: number) => {
       const node = nodes.find((n) => n.id === nodeId);
       if (!node) return;
-      setActiveNodeId(nodeId);
-      const modelNode = findNode(model, nodeId);
+      const modelNode = findNode(modelRef.current, nodeId);
       const text = modelNode?.text || "";
-      setEditingText(text);
       const pos = cursor ?? text.length;
-      setCursorPos(pos);
-      setSelectionEnd(pos);
-      if (inputRef.current) {
-        inputRef.current.value = text;
-        inputRef.current.setSelectionRange(pos, pos);
-        inputRef.current.focus();
-      }
+      applyUpdate({
+        activeNodeId: nodeId,
+        editingText: text,
+        cursorPos: pos,
+        selectionEnd: pos,
+      });
     },
-    [nodes, model]
+    [nodes, applyUpdate]
   );
 
   // --- Input handling ---
@@ -186,237 +251,76 @@ export default function MindmapEditor({
       if (isComposing) return;
       if (!activeNodeId) return;
 
-      const currentModel = modelRef.current;
-      const order = getFlatOrder(currentModel);
-      const idx = order.indexOf(activeNodeId);
+      const state = getEditorState();
+      const pos = inputRef.current?.selectionStart || 0;
+      const selEnd = inputRef.current?.selectionEnd || 0;
 
       if (e.key === "Enter") {
         e.preventDefault();
-        const pos = inputRef.current?.selectionStart || 0;
-        const currentNode = findNode(currentModel, activeNodeId);
-        if (!currentNode) return;
-
-        if (pos >= currentNode.text.length) {
-          // At end: add empty sibling
-          const newId = generateId();
-          const newNode: MindMapModel = {
-            id: newId,
-            text: "",
-            children: [],
-          };
-          setModel((prev) => addSiblingAfter(prev, activeNodeId, newNode));
-          // Directly set state instead of activateNode (nodes not yet updated)
-          setActiveNodeId(newId);
-          setEditingText("");
-          setCursorPos(0);
-          setSelectionEnd(0);
-          setTimeout(() => {
-            if (inputRef.current) {
-              inputRef.current.focus();
-              inputRef.current.setSelectionRange(0, 0);
-            }
-          }, 0);
-        } else {
-          // Mid-text: split node
-          const textAfter = currentNode.text.substring(pos);
-          const result = splitNode(currentModel, activeNodeId, pos);
-          setModel(result.model);
-          // Directly set state instead of activateNode (nodes not yet updated)
-          setActiveNodeId(result.newNodeId);
-          setEditingText(textAfter);
-          setCursorPos(0);
-          setSelectionEnd(0);
-          setTimeout(() => {
-            if (inputRef.current) {
-              inputRef.current.focus();
-              inputRef.current.setSelectionRange(0, 0);
-            }
-          }, 0);
-        }
+        applyUpdate(handleEnter(state, pos));
         return;
       }
 
       if (e.key === "Tab") {
         e.preventDefault();
-        if (e.shiftKey) {
-          setModel((prev) => dedentNode(prev, activeNodeId));
-        } else {
-          setModel((prev) => indentNode(prev, activeNodeId));
-        }
-        setTimeout(() => {
-          if (inputRef.current) {
-            const pos = inputRef.current.selectionStart || 0;
-            setCursorPos(pos);
-            setSelectionEnd(pos);
-          }
-        }, 0);
+        applyUpdate(handleTab(state, e.shiftKey));
         return;
       }
 
-      if (e.key === "Backspace") {
-        const pos = inputRef.current?.selectionStart || 0;
-        const selEnd = inputRef.current?.selectionEnd || 0;
-        // If there's a selection, let the default behavior handle it
-        if (pos !== selEnd) return;
-
-        if (pos === 0) {
-          e.preventDefault();
-          const currentNode = findNode(currentModel, activeNodeId);
-          if (!currentNode) return;
-
-          if (currentNode.text === "" && currentModel.id !== activeNodeId) {
-            // Empty node: delete it, move to previous
-            setModel((prev) => removeNode(prev, activeNodeId));
-            if (idx > 0) {
-              const prevId = order[idx - 1];
-              const prevNode = findNode(currentModel, prevId);
-              const prevText = prevNode?.text || "";
-              setActiveNodeId(prevId);
-              setEditingText(prevText);
-              setCursorPos(prevText.length);
-              setSelectionEnd(prevText.length);
-              setTimeout(() => {
-                if (inputRef.current) {
-                  inputRef.current.focus();
-                  inputRef.current.setSelectionRange(prevText.length, prevText.length);
-                }
-              }, 0);
-            } else {
-              setActiveNodeId(null);
-            }
-          } else if (idx > 0) {
-            // Non-empty at pos 0: merge with previous node
-            const prevId = order[idx - 1];
-            const prevNode = findNode(currentModel, prevId);
-            if (prevNode && currentModel.id !== activeNodeId) {
-              const mergePos = prevNode.text.length;
-              const mergedText = prevNode.text + currentNode.text;
-              let newModel = updateNodeText(
-                currentModel,
-                prevId,
-                mergedText
-              );
-              newModel = removeNode(newModel, activeNodeId);
-              setModel(newModel);
-              setActiveNodeId(prevId);
-              setEditingText(mergedText);
-              setCursorPos(mergePos);
-              setSelectionEnd(mergePos);
-              setTimeout(() => {
-                if (inputRef.current) {
-                  inputRef.current.focus();
-                  inputRef.current.setSelectionRange(mergePos, mergePos);
-                }
-              }, 0);
-            }
-          }
-          return;
-        }
+      if (e.key === "Backspace" && pos === 0 && pos === selEnd) {
+        e.preventDefault();
+        applyUpdate(handleBackspaceAtStart(state));
+        return;
       }
 
-      if (e.key === "Delete") {
-        const pos = inputRef.current?.selectionStart || 0;
-        const selEnd = inputRef.current?.selectionEnd || 0;
-        if (pos !== selEnd) return;
-
-        const currentNode = findNode(currentModel, activeNodeId);
-        if (!currentNode) return;
-
-        if (pos >= currentNode.text.length && idx < order.length - 1) {
-          // At end of text: merge with next node
+      if (e.key === "Delete" && pos === selEnd) {
+        const update = handleDeleteAtEnd(state, pos);
+        if (update) {
           e.preventDefault();
-          const nextId = order[idx + 1];
-          const nextNode = findNode(currentModel, nextId);
-          if (nextNode) {
-            let newModel = updateNodeText(
-              currentModel,
-              activeNodeId,
-              currentNode.text + nextNode.text
-            );
-            newModel = removeNode(newModel, nextId);
-            setModel(newModel);
-            setEditingText(currentNode.text + nextNode.text);
-            setTimeout(() => {
-              if (inputRef.current) {
-                inputRef.current.setSelectionRange(pos, pos);
-                setCursorPos(pos);
-                setSelectionEnd(pos);
-              }
-            }, 0);
-          }
+          applyUpdate(update);
           return;
         }
       }
 
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        if (idx > 0) {
-          activateNode(order[idx - 1]);
-        }
+        applyUpdate(handleArrowUp(state));
         return;
       }
 
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        if (idx < order.length - 1) {
-          activateNode(order[idx + 1], 0);
-        }
+        applyUpdate(handleArrowDown(state));
         return;
       }
 
       if (e.key === "ArrowLeft") {
-        const pos = inputRef.current?.selectionStart || 0;
-        const selEnd = inputRef.current?.selectionEnd || 0;
         if (e.metaKey || e.ctrlKey) {
           e.preventDefault();
-          if (pos === 0 && idx > 0) {
-            // Already at start → jump to end of previous node
-            activateNode(order[idx - 1]);
-          } else {
-            // Jump to start of current node
-            setCursorPos(0);
-            setSelectionEnd(0);
-            if (inputRef.current) {
-              inputRef.current.setSelectionRange(0, 0);
-            }
-          }
+          applyUpdate(handleCmdLeft(state, pos));
           return;
         }
-        if (pos === 0 && pos === selEnd && idx > 0) {
+        if (pos === 0 && pos === selEnd) {
           e.preventDefault();
-          activateNode(order[idx - 1]);
+          applyUpdate(handleArrowLeftEdge(state));
           return;
         }
       }
 
       if (e.key === "ArrowRight") {
-        const pos = inputRef.current?.selectionEnd || 0;
-        const selStart = inputRef.current?.selectionStart || 0;
-        const currentNode = findNode(currentModel, activeNodeId);
-        if (!currentNode) return;
         if (e.metaKey || e.ctrlKey) {
           e.preventDefault();
-          if (pos >= currentNode.text.length && idx < order.length - 1) {
-            // Already at end → jump to start of next node
-            activateNode(order[idx + 1], 0);
-          } else {
-            // Jump to end of current node
-            const endPos = currentNode.text.length;
-            setCursorPos(endPos);
-            setSelectionEnd(endPos);
-            if (inputRef.current) {
-              inputRef.current.setSelectionRange(endPos, endPos);
-            }
-          }
+          applyUpdate(handleCmdRight(state, pos));
           return;
         }
+        const currentNode = findNode(modelRef.current, activeNodeId);
         if (
+          currentNode &&
           pos >= currentNode.text.length &&
-          pos === selStart &&
-          idx < order.length - 1
+          pos === selEnd
         ) {
           e.preventDefault();
-          activateNode(order[idx + 1], 0);
+          applyUpdate(handleArrowRightEdge(state));
           return;
         }
       }
@@ -428,7 +332,7 @@ export default function MindmapEditor({
         return;
       }
     },
-    [isComposing, activeNodeId, activateNode]
+    [isComposing, activeNodeId, getEditorState, applyUpdate]
   );
 
   // --- Title editing ---

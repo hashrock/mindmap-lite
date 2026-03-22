@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import type { MindMapNode } from "../types/MindMap";
 import { layoutMindMap } from "../lib/treeLayout";
-import { parseContent, flattenToNodes } from "../lib/mindmapModel";
+import { parseContent } from "../application/persistence";
+import { flattenToNodes } from "../application/nodeUtils";
 
 interface Props {
   initialContent: string;
