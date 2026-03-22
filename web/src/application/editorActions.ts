@@ -15,6 +15,7 @@ import {
   dedentNode,
   splitNode,
   updateNodeText,
+  deleteNodeRange,
 } from "../domain/model";
 
 export interface EditorState {
@@ -23,10 +24,56 @@ export interface EditorState {
   editingText: string;
   cursorPos: number;
   selectionEnd: number;
+  // Multi-node selection anchor (null = same as activeNodeId)
+  selAnchorNodeId: string | null;
+  selAnchorOffset: number;
 }
 
 /** Partial state update returned by actions. null = no action taken. */
 export type StateUpdate = Partial<EditorState> | null;
+
+// --- Helpers ---
+
+export function isMultiNodeSelection(state: EditorState): boolean {
+  return (
+    state.selAnchorNodeId !== null &&
+    state.selAnchorNodeId !== state.activeNodeId
+  );
+}
+
+/** Collapse a multi-node selection by deleting the range */
+export function collapseMultiNodeSelection(state: EditorState): StateUpdate {
+  const { model, activeNodeId, selAnchorNodeId, selAnchorOffset, cursorPos } =
+    state;
+  if (!activeNodeId || !selAnchorNodeId || selAnchorNodeId === activeNodeId)
+    return null;
+
+  const { model: newModel, cursorNodeId, cursorOffset } = deleteNodeRange(
+    model,
+    selAnchorNodeId,
+    selAnchorOffset,
+    activeNodeId,
+    cursorPos
+  );
+  const node = findNode(newModel, cursorNodeId);
+  return {
+    model: newModel,
+    activeNodeId: cursorNodeId,
+    editingText: node?.text || "",
+    cursorPos: cursorOffset,
+    selectionEnd: cursorOffset,
+    selAnchorNodeId: null,
+    selAnchorOffset: 0,
+  };
+}
+
+/** Collapse single-node selection (just set cursor, no deletion) */
+export function hasAnySelection(state: EditorState): boolean {
+  return (
+    isMultiNodeSelection(state) ||
+    state.cursorPos !== state.selectionEnd
+  );
+}
 
 // --- Actions ---
 

@@ -18,9 +18,12 @@ import {
   handleCmdShiftRight,
   handleArrowLeftEdge,
   handleArrowRightEdge,
+  isMultiNodeSelection,
+  collapseMultiNodeSelection,
   type EditorState,
   type StateUpdate,
 } from "../application/editorActions";
+import { getFlatOrder } from "../domain/model";
 
 interface Props {
   noteId?: string;
@@ -48,6 +51,9 @@ export default function MindmapEditor({
   const [selectionEnd, setSelectionEnd] = useState(0);
   const [isComposing, setIsComposing] = useState(false);
   const [cursorVisible, setCursorVisible] = useState(true);
+  // Multi-node selection anchor (null = no multi-node selection)
+  const [selAnchorNodeId, setSelAnchorNodeId] = useState<string | null>(null);
+  const [selAnchorOffset, setSelAnchorOffset] = useState(0);
   const [konvaReady, setKonvaReady] = useState(false);
   const [inputPos, setInputPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
@@ -135,8 +141,10 @@ export default function MindmapEditor({
       editingText,
       cursorPos,
       selectionEnd,
+      selAnchorNodeId,
+      selAnchorOffset,
     }),
-    [activeNodeId, editingText, cursorPos, selectionEnd]
+    [activeNodeId, editingText, cursorPos, selectionEnd, selAnchorNodeId, selAnchorOffset]
   );
 
   // --- Apply state update from an action ---
@@ -173,6 +181,10 @@ export default function MindmapEditor({
       if (update.cursorPos !== undefined) setCursorPos(update.cursorPos);
       if (update.selectionEnd !== undefined)
         setSelectionEnd(update.selectionEnd);
+      if (update.selAnchorNodeId !== undefined)
+        setSelAnchorNodeId(update.selAnchorNodeId);
+      if (update.selAnchorOffset !== undefined)
+        setSelAnchorOffset(update.selAnchorOffset);
       // Sync hidden input
       if (
         update.editingText !== undefined ||
@@ -207,6 +219,8 @@ export default function MindmapEditor({
         editingText: text,
         cursorPos: pos,
         selectionEnd: pos,
+        selAnchorNodeId: null,
+        selAnchorOffset: 0,
       });
     },
     [nodes, applyUpdate]
@@ -217,6 +231,8 @@ export default function MindmapEditor({
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const newText = e.target.value;
       setEditingText(newText);
+      setSelAnchorNodeId(null);
+      setSelAnchorOffset(0);
       if (!isComposing && activeNodeId) {
         setModel((prev) => updateNodeText(prev, activeNodeId, newText));
       }
@@ -261,6 +277,53 @@ export default function MindmapEditor({
       const state = getEditorState();
       const pos = inputRef.current?.selectionStart || 0;
       const selEnd = inputRef.current?.selectionEnd || 0;
+
+      // If multi-node selection, collapse it before most actions
+      if (isMultiNodeSelection(state)) {
+        if (
+          e.key === "Backspace" ||
+          e.key === "Delete" ||
+          e.key === "Enter" ||
+          (e.key.length === 1 && !e.metaKey && !e.ctrlKey)
+        ) {
+          e.preventDefault();
+          const collapsed = collapseMultiNodeSelection(state);
+          if (collapsed) {
+            applyUpdate(collapsed);
+            // For single-char typing, insert the char after collapse
+            if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+              // After collapse, insert the typed character
+              setTimeout(() => {
+                const m = modelRef.current;
+                const nodeId = collapsed.activeNodeId;
+                if (!nodeId) return;
+                const node = findNode(m, nodeId);
+                if (!node) return;
+                const cPos = collapsed.cursorPos ?? 0;
+                const newText =
+                  node.text.substring(0, cPos) +
+                  e.key +
+                  node.text.substring(cPos);
+                setModel(updateNodeText(m, nodeId, newText));
+                setEditingText(newText);
+                setCursorPos(cPos + 1);
+                setSelectionEnd(cPos + 1);
+                if (inputRef.current) {
+                  inputRef.current.value = newText;
+                  inputRef.current.setSelectionRange(cPos + 1, cPos + 1);
+                }
+              }, 0);
+            }
+          }
+          return;
+        }
+        // Arrow keys / Escape: clear multi-node selection
+        if (e.key.startsWith("Arrow") || e.key === "Escape") {
+          setSelAnchorNodeId(null);
+          setSelAnchorOffset(0);
+          // Fall through to normal handling
+        }
+      }
 
       if (e.key === "Enter") {
         e.preventDefault();
@@ -427,7 +490,7 @@ export default function MindmapEditor({
         }
       });
 
-      // Drag selection on stage
+      // Drag selection on stage (supports multi-node)
       stage.on("mousemove", () => {
         const drag = dragStateRef.current;
         if (!drag) return;
@@ -437,14 +500,24 @@ export default function MindmapEditor({
         const worldX = (pointer.x - stage.x()) / scale;
         const worldY = (pointer.y - stage.y()) / scale;
 
-        // Find the drag target node
         const currentNodes = nodesRef.current;
-        const targetNode = currentNodes.find((n) => n.id === drag.nodeId);
-        if (!targetNode) return;
-
         const nodePadding = 20;
-        const relX = worldX - targetNode.x - nodePadding;
-        const offsets = cursorOffsetsRef.current.get(drag.nodeId);
+
+        // Find closest node by Y
+        let closestNode = currentNodes.find((n) => n.id === drag.nodeId);
+        let closestDist = Infinity;
+        for (const n of currentNodes) {
+          const dist = Math.abs(n.y - worldY);
+          if (dist < closestDist) {
+            closestDist = dist;
+            closestNode = n;
+          }
+        }
+        if (!closestNode) return;
+
+        // Find char position within closest node
+        const relX = worldX - closestNode.x - nodePadding;
+        const offsets = cursorOffsetsRef.current.get(closestNode.id);
         let charIdx = 0;
         if (offsets) {
           let bestDist = Math.abs(relX);
@@ -457,12 +530,30 @@ export default function MindmapEditor({
           }
         }
 
-        const start = Math.min(drag.anchorCharIdx, charIdx);
-        const end = Math.max(drag.anchorCharIdx, charIdx);
-        setCursorPos(start);
-        setSelectionEnd(end);
-        if (inputRef.current) {
-          inputRef.current.setSelectionRange(start, end);
+        if (closestNode.id === drag.nodeId) {
+          // Same node: single-node selection
+          const start = Math.min(drag.anchorCharIdx, charIdx);
+          const end = Math.max(drag.anchorCharIdx, charIdx);
+          setCursorPos(start);
+          setSelectionEnd(end);
+          setSelAnchorNodeId(drag.nodeId);
+          setSelAnchorOffset(drag.anchorCharIdx);
+          if (inputRef.current) {
+            inputRef.current.setSelectionRange(start, end);
+          }
+        } else {
+          // Multi-node: focus moves to the closest node
+          setActiveNodeId(closestNode.id);
+          const modelNode = findNode(modelRef.current, closestNode.id);
+          setEditingText(modelNode?.text || "");
+          setCursorPos(charIdx);
+          setSelectionEnd(charIdx);
+          setSelAnchorNodeId(drag.nodeId);
+          setSelAnchorOffset(drag.anchorCharIdx);
+          if (inputRef.current) {
+            inputRef.current.value = modelNode?.text || "";
+            inputRef.current.setSelectionRange(charIdx, charIdx);
+          }
         }
       });
 
@@ -712,6 +803,8 @@ export default function MindmapEditor({
         setEditingText(modelNode?.text || "");
         setCursorPos(charIdx);
         setSelectionEnd(charIdx);
+        setSelAnchorNodeId(node.id);
+        setSelAnchorOffset(charIdx);
 
         // Start drag selection
         dragStateRef.current = { nodeId: node.id, anchorCharIdx: charIdx };
@@ -762,49 +855,108 @@ export default function MindmapEditor({
 
     cursorLayer.destroyChildren();
 
-    const activeNode = nodes.find((n) => n.id === activeNodeId);
-    if (!activeNode) return;
-
-    const isRoot = nodes.indexOf(activeNode) === 0;
     const nodePadding = 20;
-    const offsets = cursorOffsetsRef.current.get(activeNodeId);
+    const isMulti =
+      selAnchorNodeId !== null && selAnchorNodeId !== activeNodeId;
 
-    // Selection highlight
-    if (cursorPos !== selectionEnd) {
-      const selStart = Math.min(cursorPos, selectionEnd);
-      const selEndPos = Math.max(cursorPos, selectionEnd);
-      const selStartX = offsets?.[selStart] || 0;
-      const selEndX = offsets?.[selEndPos] || 0;
-      if (selEndX > selStartX) {
-        const highlight = new Konva.Rect({
-          x: activeNode.x + nodePadding + selStartX,
-          y: activeNode.y - 10,
-          width: selEndX - selStartX,
-          height: 20,
-          fill: isRoot
-            ? "rgba(255, 255, 255, 0.3)"
-            : "rgba(0, 100, 255, 0.2)",
+    if (isMulti) {
+      // Multi-node selection highlight
+      const order = getFlatOrder(modelRef.current);
+      const anchorIdx = order.indexOf(selAnchorNodeId);
+      const focusIdx = order.indexOf(activeNodeId);
+      const startIdx = Math.min(anchorIdx, focusIdx);
+      const endIdx = Math.max(anchorIdx, focusIdx);
+
+      // Determine start/end offsets based on direction
+      const isForward = anchorIdx <= focusIdx;
+      const startNodeId = isForward ? selAnchorNodeId : activeNodeId;
+      const startOffset = isForward ? selAnchorOffset : cursorPos;
+      const endNodeId = isForward ? activeNodeId : selAnchorNodeId;
+      const endOffset = isForward ? cursorPos : selAnchorOffset;
+
+      for (let i = startIdx; i <= endIdx; i++) {
+        const nodeId = order[i];
+        const node = nodes.find((n) => n.id === nodeId);
+        if (!node) continue;
+
+        const nodeOffsets = cursorOffsetsRef.current.get(nodeId);
+        const isRoot = nodes.indexOf(node) === 0;
+        const modelNode = findNode(modelRef.current, nodeId);
+        const textLen = modelNode?.text.length || 0;
+
+        let hlStart = 0;
+        let hlEnd = textLen;
+
+        if (nodeId === startNodeId) {
+          hlStart = startOffset;
+        }
+        if (nodeId === endNodeId) {
+          hlEnd = endOffset;
+        }
+
+        if (hlStart < hlEnd && nodeOffsets) {
+          const startX = nodeOffsets[hlStart] || 0;
+          const endX = nodeOffsets[hlEnd] || 0;
+          if (endX > startX) {
+            const highlight = new Konva.Rect({
+              x: node.x + nodePadding + startX,
+              y: node.y - 10,
+              width: endX - startX,
+              height: 20,
+              fill: isRoot
+                ? "rgba(255, 255, 255, 0.3)"
+                : "rgba(0, 100, 255, 0.2)",
+              listening: false,
+            });
+            cursorLayer.add(highlight);
+          }
+        }
+      }
+    } else {
+      // Single-node selection or cursor
+      const activeNode = nodes.find((n) => n.id === activeNodeId);
+      if (!activeNode) return;
+
+      const isRoot = nodes.indexOf(activeNode) === 0;
+      const offsets = cursorOffsetsRef.current.get(activeNodeId);
+
+      // Selection highlight
+      if (cursorPos !== selectionEnd) {
+        const selStart = Math.min(cursorPos, selectionEnd);
+        const selEndPos = Math.max(cursorPos, selectionEnd);
+        const selStartX = offsets?.[selStart] || 0;
+        const selEndX = offsets?.[selEndPos] || 0;
+        if (selEndX > selStartX) {
+          const highlight = new Konva.Rect({
+            x: activeNode.x + nodePadding + selStartX,
+            y: activeNode.y - 10,
+            width: selEndX - selStartX,
+            height: 20,
+            fill: isRoot
+              ? "rgba(255, 255, 255, 0.3)"
+              : "rgba(0, 100, 255, 0.2)",
+            listening: false,
+          });
+          cursorLayer.add(highlight);
+        }
+      }
+
+      // Cursor line
+      if (cursorVisible && cursorPos === selectionEnd) {
+        const cursorX =
+          activeNode.x + nodePadding + (offsets?.[cursorPos] || 0);
+        const line = new Konva.Line({
+          points: [cursorX, activeNode.y - 10, cursorX, activeNode.y + 10],
+          stroke: isRoot ? "#ffffff" : "#000000",
+          strokeWidth: 2,
           listening: false,
         });
-        cursorLayer.add(highlight);
+        cursorLayer.add(line);
       }
     }
 
-    // Cursor line
-    if (cursorVisible && cursorPos === selectionEnd) {
-      const cursorX =
-        activeNode.x + nodePadding + (offsets?.[cursorPos] || 0);
-      const line = new Konva.Line({
-        points: [cursorX, activeNode.y - 10, cursorX, activeNode.y + 10],
-        stroke: isRoot ? "#ffffff" : "#000000",
-        strokeWidth: 2,
-        listening: false,
-      });
-      cursorLayer.add(line);
-    }
-
     cursorLayer.draw();
-  }, [activeNodeId, cursorPos, selectionEnd, cursorVisible, nodes]);
+  }, [activeNodeId, cursorPos, selectionEnd, cursorVisible, nodes, selAnchorNodeId, selAnchorOffset]);
 
   return (
     <div className="flex flex-col h-full">
