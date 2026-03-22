@@ -23,6 +23,7 @@ import {
   type EditorState,
   type StateUpdate,
 } from "../application/editorActions";
+import { UndoManager } from "../application/undoManager";
 import { getFlatOrder } from "../domain/model";
 
 interface Props {
@@ -72,6 +73,7 @@ export default function MindmapEditor({
     anchorCharIdx: number;
   } | null>(null);
   const wasDraggingRef = useRef(false);
+  const undoManagerRef = useRef(new UndoManager());
   const modelRef = useRef(model);
   modelRef.current = model;
 
@@ -145,6 +147,37 @@ export default function MindmapEditor({
       selAnchorOffset,
     }),
     [activeNodeId, editingText, cursorPos, selectionEnd, selAnchorNodeId, selAnchorOffset]
+  );
+
+  // --- Undo manager setup ---
+  useEffect(() => {
+    undoManagerRef.current.setCommitCallback(() => getEditorState());
+  }, [getEditorState]);
+
+  /** Restore full editor state (for undo/redo) */
+  const applyFullState = useCallback((state: EditorState) => {
+    setModel(state.model);
+    setActiveNodeId(state.activeNodeId);
+    setEditingText(state.editingText);
+    setCursorPos(state.cursorPos);
+    setSelectionEnd(state.selectionEnd);
+    setSelAnchorNodeId(state.selAnchorNodeId);
+    setSelAnchorOffset(state.selAnchorOffset);
+    if (inputRef.current) {
+      inputRef.current.value = state.editingText;
+      const pos = state.cursorPos;
+      const sel = state.selectionEnd;
+      inputRef.current.setSelectionRange(pos, sel);
+      if (state.activeNodeId) inputRef.current.focus();
+    }
+  }, []);
+
+  /** Push a structural command to the undo stack */
+  const pushUndoable = useCallback(
+    (type: string, stateBefore: EditorState, stateAfter: EditorState) => {
+      undoManagerRef.current.push(type, stateBefore, stateAfter);
+    },
+    []
   );
 
   // --- Apply state update from an action ---
@@ -229,6 +262,12 @@ export default function MindmapEditor({
   // --- Input handling ---
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
+      // Record state before first keystroke of a batch
+      if (!undoManagerRef.current.hasPendingText()) {
+        undoManagerRef.current.handleTextChange(getEditorState());
+      } else {
+        undoManagerRef.current.handleTextChange(getEditorState());
+      }
       const newText = e.target.value;
       setEditingText(newText);
       setSelAnchorNodeId(null);
@@ -272,6 +311,20 @@ export default function MindmapEditor({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (isComposing) return;
+
+      // Undo / Redo
+      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          const state = undoManagerRef.current.redo();
+          if (state) applyFullState(state);
+        } else {
+          const state = undoManagerRef.current.undo();
+          if (state) applyFullState(state);
+        }
+        return;
+      }
+
       if (!activeNodeId) return;
 
       const state = getEditorState();
@@ -287,9 +340,11 @@ export default function MindmapEditor({
           (e.key.length === 1 && !e.metaKey && !e.ctrlKey)
         ) {
           e.preventDefault();
+          undoManagerRef.current.commitPendingText();
           const collapsed = collapseMultiNodeSelection(state);
           if (collapsed) {
             applyUpdate(collapsed);
+            pushUndoable("delete-range", state, { ...state, ...collapsed });
             // For single-char typing, insert the char after collapse
             if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
               // After collapse, insert the typed character
@@ -327,19 +382,34 @@ export default function MindmapEditor({
 
       if (e.key === "Enter") {
         e.preventDefault();
-        applyUpdate(handleEnter(state, pos));
+        undoManagerRef.current.commitPendingText();
+        const update = handleEnter(state, pos);
+        if (update) {
+          applyUpdate(update);
+          pushUndoable("enter", state, { ...state, ...update });
+        }
         return;
       }
 
       if (e.key === "Tab") {
         e.preventDefault();
-        applyUpdate(handleTab(state, e.shiftKey));
+        undoManagerRef.current.commitPendingText();
+        const update = handleTab(state, e.shiftKey);
+        if (update) {
+          applyUpdate(update);
+          pushUndoable("indent", state, { ...state, ...update });
+        }
         return;
       }
 
       if (e.key === "Backspace" && pos === 0 && pos === selEnd) {
         e.preventDefault();
-        applyUpdate(handleBackspaceAtStart(state));
+        undoManagerRef.current.commitPendingText();
+        const update = handleBackspaceAtStart(state);
+        if (update) {
+          applyUpdate(update);
+          pushUndoable("backspace", state, { ...state, ...update });
+        }
         return;
       }
 
@@ -347,7 +417,9 @@ export default function MindmapEditor({
         const update = handleDeleteAtEnd(state, pos);
         if (update) {
           e.preventDefault();
+          undoManagerRef.current.commitPendingText();
           applyUpdate(update);
+          pushUndoable("delete", state, { ...state, ...update });
           return;
         }
       }
@@ -420,7 +492,7 @@ export default function MindmapEditor({
         return;
       }
     },
-    [isComposing, activeNodeId, getEditorState, applyUpdate]
+    [isComposing, activeNodeId, getEditorState, applyUpdate, applyFullState, pushUndoable]
   );
 
   // --- Title editing ---
