@@ -222,6 +222,32 @@ export function handleCmdRight(
   return { cursorPos: endPos, selectionEnd: endPos };
 }
 
+export function handleCmdShiftLeft(
+  state: EditorState,
+  inputPos: number,
+  inputSelEnd: number
+): StateUpdate {
+  const { activeNodeId } = state;
+  if (!activeNodeId) return null;
+  // Extend selection to start of node, anchor stays
+  const anchor = inputPos < inputSelEnd ? inputSelEnd : inputSelEnd;
+  return { cursorPos: 0, selectionEnd: anchor };
+}
+
+export function handleCmdShiftRight(
+  state: EditorState,
+  inputPos: number,
+  inputSelEnd: number
+): StateUpdate {
+  const { model, activeNodeId } = state;
+  if (!activeNodeId) return null;
+  const currentNode = findNode(model, activeNodeId);
+  if (!currentNode) return null;
+  // Extend selection to end of node, anchor stays
+  const anchor = inputPos < inputSelEnd ? inputPos : inputPos;
+  return { cursorPos: anchor, selectionEnd: currentNode.text.length };
+}
+
 export function handleArrowLeftEdge(state: EditorState): StateUpdate {
   const { model, activeNodeId } = state;
   if (!activeNodeId) return null;

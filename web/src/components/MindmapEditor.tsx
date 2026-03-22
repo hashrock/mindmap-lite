@@ -14,6 +14,8 @@ import {
   handleArrowDown,
   handleCmdLeft,
   handleCmdRight,
+  handleCmdShiftLeft,
+  handleCmdShiftRight,
   handleArrowLeftEdge,
   handleArrowRightEdge,
   type EditorState,
@@ -59,6 +61,11 @@ export default function MindmapEditor({
   const saveTimerRef = useRef<any>(null);
   const saveStatusRef = useRef<HTMLSpanElement>(null);
   const cursorOffsetsRef = useRef<Map<string, number[]>>(new Map());
+  const dragStateRef = useRef<{
+    nodeId: string;
+    anchorCharIdx: number;
+  } | null>(null);
+  const wasDraggingRef = useRef(false);
   const modelRef = useRef(model);
   modelRef.current = model;
 
@@ -295,9 +302,18 @@ export default function MindmapEditor({
       }
 
       if (e.key === "ArrowLeft") {
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
+          e.preventDefault();
+          applyUpdate(handleCmdShiftLeft(state, pos, selEnd));
+          return;
+        }
         if (e.metaKey || e.ctrlKey) {
           e.preventDefault();
           applyUpdate(handleCmdLeft(state, pos));
+          return;
+        }
+        if (e.shiftKey) {
+          // Shift+Left: let native input handle selection extension
           return;
         }
         if (pos === 0 && pos === selEnd) {
@@ -308,9 +324,18 @@ export default function MindmapEditor({
       }
 
       if (e.key === "ArrowRight") {
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
+          e.preventDefault();
+          applyUpdate(handleCmdShiftRight(state, pos, selEnd));
+          return;
+        }
         if (e.metaKey || e.ctrlKey) {
           e.preventDefault();
           applyUpdate(handleCmdRight(state, pos));
+          return;
+        }
+        if (e.shiftKey) {
+          // Shift+Right: let native input handle selection extension
           return;
         }
         const currentNode = findNode(modelRef.current, activeNodeId);
@@ -391,10 +416,61 @@ export default function MindmapEditor({
         layer.draw();
       });
 
-      // Click on empty space → deselect
+      // Click on empty space → deselect (skip if just finished dragging)
       stage.on("click tap", (e: any) => {
+        if (wasDraggingRef.current) {
+          wasDraggingRef.current = false;
+          return;
+        }
         if (e.target === stage) {
           setActiveNodeId(null);
+        }
+      });
+
+      // Drag selection on stage
+      stage.on("mousemove", () => {
+        const drag = dragStateRef.current;
+        if (!drag) return;
+        const pointer = stage.getPointerPosition();
+        if (!pointer) return;
+        const scale = stage.scaleX();
+        const worldX = (pointer.x - stage.x()) / scale;
+        const worldY = (pointer.y - stage.y()) / scale;
+
+        // Find the drag target node
+        const currentNodes = nodesRef.current;
+        const targetNode = currentNodes.find((n) => n.id === drag.nodeId);
+        if (!targetNode) return;
+
+        const nodePadding = 20;
+        const relX = worldX - targetNode.x - nodePadding;
+        const offsets = cursorOffsetsRef.current.get(drag.nodeId);
+        let charIdx = 0;
+        if (offsets) {
+          let bestDist = Math.abs(relX);
+          for (let i = 1; i < offsets.length; i++) {
+            const d = Math.abs(relX - offsets[i]);
+            if (d < bestDist) {
+              bestDist = d;
+              charIdx = i;
+            }
+          }
+        }
+
+        const start = Math.min(drag.anchorCharIdx, charIdx);
+        const end = Math.max(drag.anchorCharIdx, charIdx);
+        setCursorPos(start);
+        setSelectionEnd(end);
+        if (inputRef.current) {
+          inputRef.current.setSelectionRange(start, end);
+        }
+      });
+
+      stage.on("mouseup touchend", () => {
+        if (dragStateRef.current) {
+          wasDraggingRef.current = true;
+          dragStateRef.current = null;
+          stage.draggable(true);
         }
       });
 
@@ -636,6 +712,12 @@ export default function MindmapEditor({
         setEditingText(modelNode?.text || "");
         setCursorPos(charIdx);
         setSelectionEnd(charIdx);
+
+        // Start drag selection
+        dragStateRef.current = { nodeId: node.id, anchorCharIdx: charIdx };
+        const stageRef = konvaStageRef.current;
+        if (stageRef) stageRef.draggable(false);
+
         setTimeout(() => {
           if (inputRef.current) {
             inputRef.current.focus();
