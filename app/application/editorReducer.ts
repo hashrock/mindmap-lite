@@ -232,6 +232,9 @@ export type EditorAction =
   // --- bulk / misc ---
   | { type: "insertNodes"; targetId: string; nodes: MindMapModel[] }
   | { type: "setTitle"; text: string }
+  // Per-note single/multi-root switch (settings UI). See
+  // `MindMapModel.multiRoot` for what it gates.
+  | { type: "setMultiRoot"; value: boolean }
   | { type: "replace"; state: EditorState };
 
 // --- Document reducer ---
@@ -457,11 +460,16 @@ function documentReducer(
 
     case "addRootAt": {
       const newNode: MindMapModel = { id: nextId(), text: "", children: [] };
+      const newModel = addRootAt(document.model, newNode, {
+        x: action.x,
+        y: action.y,
+      });
+      // addRootAt returns the same reference when blocked (single-root note
+      // that already has a tree); keep the document identity so the reducer
+      // skips undo/save and the view doesn't focus a node that was never added.
+      if (newModel === document.model) return { document };
       return {
-        document: {
-          ...document,
-          model: addRootAt(document.model, newNode, { x: action.x, y: action.y }),
-        },
+        document: { ...document, model: newModel },
         focusId: newNode.id,
         focusCursorPos: 0,
         focusSelectionEnd: 0,
@@ -618,6 +626,13 @@ function documentReducer(
         action.text
       );
       return { document: { ...document, model: nextModel } };
+    }
+
+    case "setMultiRoot": {
+      if ((document.model.multiRoot ?? true) === action.value) return { document };
+      return {
+        document: { ...document, model: { ...document.model, multiRoot: action.value } },
+      };
     }
 
     // Pure view actions: the document never changes.
@@ -814,6 +829,7 @@ function viewReducer(
     case "setLinkMeta":
     case "setChecked":
     case "copyBranch":
+    case "setMultiRoot":
       return view;
 
     case "moveUp":

@@ -78,14 +78,19 @@ export const modelArb: fc.Arbitrary<MindMapModel> = fc
   .record({
     text: nodeTextArb,
     children: fc.array(draftArb, { minLength: 1, maxLength: 3 }),
+    // Absent-or-false, like `collapsed`/`bold` are absent-or-true (see
+    // normalizeTree) — `true` is the default and stores no bytes.
+    multiRoot: fc.constantFrom<boolean | undefined>(undefined, false),
   })
-  .map(({ text, children }) => {
+  .map(({ text, children, multiRoot }) => {
     const next = sequentialIds("n");
-    return {
+    const model: MindMapModel = {
       id: "root",
       text,
       children: children.map((c) => assignIds(c, next, true)),
     };
+    if (multiRoot === false) model.multiRoot = false;
+    return model;
   });
 
 /** Every id in the tree, root included, in DFS order (collapse ignored). */

@@ -23,6 +23,7 @@ import {
   moveNodeDown,
   moveBranch,
   placeBranchAt,
+  addRootAt,
   mergeIntoPredecessor,
   mergeSuccessorInto,
   isStoredNodeType,
@@ -626,6 +627,32 @@ describe("placeBranchAt", () => {
     const m = model();
     expect(placeBranchAt(m, "root", { x: 0, y: 0 })).toBe(m);
     expect(placeBranchAt(m, "nope", { x: 0, y: 0 })).toBe(m);
+  });
+});
+
+describe("addRootAt", () => {
+  const newNode = (): MindMapModel => ({ id: "new", text: "", children: [] });
+
+  it("adds a positioned top-level tree by default (multiRoot absent)", () => {
+    const m: MindMapModel = { id: "root", text: "Root", children: [] };
+    const next = addRootAt(m, newNode(), { x: 1, y: 2 });
+    expect(next.children).toEqual([{ id: "new", text: "", children: [], position: { x: 1, y: 2 } }]);
+  });
+
+  it("is a no-op when multiRoot is false and a tree already exists", () => {
+    const m: MindMapModel = {
+      id: "root",
+      text: "Root",
+      multiRoot: false,
+      children: [{ id: "a", text: "A", children: [] }],
+    };
+    expect(addRootAt(m, newNode(), { x: 0, y: 0 })).toBe(m);
+  });
+
+  it("still allows the first tree when multiRoot is false and there are none yet", () => {
+    const m: MindMapModel = { id: "root", text: "Root", multiRoot: false, children: [] };
+    const next = addRootAt(m, newNode(), { x: 0, y: 0 });
+    expect(next.children).toHaveLength(1);
   });
 });
 

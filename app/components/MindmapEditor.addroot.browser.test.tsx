@@ -53,15 +53,15 @@ beforeEach(() => {
   document.head.appendChild(style);
 });
 
-async function setup(readOnly = false) {
+async function setup(readOnly = false, model: MindMapModel = MODEL) {
   render(
     <MindmapEditor
-      initialContent={JSON.stringify(MODEL)}
+      initialContent={JSON.stringify(model)}
       initialTitle="Root"
       readOnly={readOnly}
     />
   );
-  await waitFor(() => api().getActiveNodeId() === "a");
+  await waitFor(() => api().getActiveNodeId() === model.children[0].id);
   await waitFor(() => api().getRedrawStats().redrawCount > 0);
   const canvas = document.querySelector<HTMLElement>('[data-testid="mm-canvas"]')!;
   const target = canvas.querySelector("canvas") ?? canvas;
@@ -120,5 +120,17 @@ describe("adding a tree root", () => {
     rightClick(60, 100);
     await new Promise((r) => setTimeout(r, 200));
     expect(menuButton("Add root here")).toBeUndefined();
+  });
+
+  it("offers nothing when the note is single-root and already has its one tree", async () => {
+    const { rightClick } = await setup(false, { ...MODEL, multiRoot: false });
+    rightClick(60, 100);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(menuButton("Add root here")).toBeUndefined();
+    // The invariant lives in addRootAt itself (see domain/model.test.ts and
+    // editorReducer.test.ts for the childless / already-has-a-tree cases at
+    // the unit level) — every top-level document always has at least one
+    // tree in practice (`ensureTopLevelNode`), so a single-root note reaching
+    // this menu is always the "already has one" case this test covers.
   });
 });

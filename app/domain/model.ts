@@ -80,6 +80,15 @@ export interface MindMapModel {
    * nested under another.
    */
   position?: NodePosition;
+  /**
+   * Meaningful only on the root (the invisible note-level container, see
+   * {@link topLevelNodes}). `false` restricts the document to a single
+   * top-level tree — the only mode before multi-root — by turning
+   * {@link addRootAt} into a no-op once one exists. Absent = `true`
+   * (multi-root, the default), so existing documents are unaffected and the
+   * common case adds no bytes (same trick as `StoredNodeType`).
+   */
+  multiRoot?: boolean;
 }
 
 export interface NodePosition {
@@ -171,12 +180,18 @@ export function isTopLevel(model: MindMapModel, nodeId: string): boolean {
   return model.children.some((c) => c.id === nodeId);
 }
 
-/** Add a blank tree root placed at a canvas position. */
+/**
+ * Add a blank tree root placed at a canvas position. No-op (same reference)
+ * when the document is single-root ({@link MindMapModel.multiRoot} `=== false`)
+ * and a tree already exists — the single chokepoint that keeps that setting
+ * an actual invariant rather than just a hidden menu item.
+ */
 export function addRootAt(
   model: MindMapModel,
   newNode: MindMapModel,
   position: NodePosition
 ): MindMapModel {
+  if (model.multiRoot === false && model.children.length > 0) return model;
   const cloned = cloneModel(model);
   cloned.children.push({ ...newNode, position: { ...position } });
   return cloned;
