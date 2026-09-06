@@ -180,18 +180,35 @@ export function isTopLevel(model: MindMapModel, nodeId: string): boolean {
   return model.children.some((c) => c.id === nodeId);
 }
 
+/** Resolves {@link MindMapModel.multiRoot}'s absent-means-true default. */
+export function isMultiRoot(model: MindMapModel): boolean {
+  return model.multiRoot !== false;
+}
+
+/**
+ * Would another top-level tree be allowed? False once a single-root document
+ * ({@link isMultiRoot} false) already has one — the shared guard behind every
+ * way a new tree could be produced: {@link addRootAt} (the deliberate one)
+ * and {@link dedentNode} (dedenting a depth-1 node would otherwise promote it
+ * to a new tree). Checking this once here, rather than re-deriving the
+ * condition at each call site, keeps them from drifting apart if the rule
+ * ever changes (e.g. to a cap higher than one).
+ */
+export function canAddRoot(model: MindMapModel): boolean {
+  return isMultiRoot(model) || model.children.length === 0;
+}
+
 /**
  * Add a blank tree root placed at a canvas position. No-op (same reference)
- * when the document is single-root ({@link MindMapModel.multiRoot} `=== false`)
- * and a tree already exists — the single chokepoint that keeps that setting
- * an actual invariant rather than just a hidden menu item.
+ * when {@link canAddRoot} says no — the single chokepoint that keeps the
+ * single-root setting an actual invariant rather than just a hidden menu item.
  */
 export function addRootAt(
   model: MindMapModel,
   newNode: MindMapModel,
   position: NodePosition
 ): MindMapModel {
-  if (model.multiRoot === false && model.children.length > 0) return model;
+  if (!canAddRoot(model)) return model;
   const cloned = cloneModel(model);
   cloned.children.push({ ...newNode, position: { ...position } });
   return cloned;
@@ -522,7 +539,12 @@ export function indentNode(
   return cloned;
 }
 
-/** Dedent: move node to parent's level, after parent. */
+/**
+ * Dedent: move node to parent's level, after parent. No-op (same reference)
+ * when the node is a depth-1 node and dedenting it would promote it to a new
+ * top-level tree that {@link canAddRoot} says isn't allowed — otherwise
+ * Shift+Tab would be a second, ungated way around the single-root cap.
+ */
 export function dedentNode(
   model: MindMapModel,
   nodeId: string
@@ -533,6 +555,7 @@ export function dedentNode(
   if (!result) return cloned;
   const grandResult = findParentAndIndex(cloned, result.parent.id);
   if (!grandResult) return cloned;
+  if (grandResult.parent.id === cloned.id && !canAddRoot(model)) return model;
   const node = result.parent.children[result.index];
   result.parent.children.splice(result.index, 1);
   grandResult.parent.children.splice(grandResult.index + 1, 0, node);

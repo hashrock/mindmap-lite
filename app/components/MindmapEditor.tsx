@@ -11,8 +11,10 @@ import { Link, router } from "@inertiajs/react";
 import type { MindMapNode } from "../application/nodeUtils";
 import type { MindMapModel, NodeType } from "../domain/model";
 import {
+  canAddRoot,
   findNode,
   firstNavigableId,
+  isMultiRoot,
   isTopLevel,
   subtreeIds,
 } from "../domain/model";
@@ -1159,8 +1161,7 @@ export function MindmapEditorView({
       // once a single-root note already has its one tree (addRootAt would
       // otherwise silently no-op — see domain/model.ts).
       if (readOnly) return [];
-      const current = modelRef.current;
-      if (current.multiRoot === false && current.children.length > 0) return [];
+      if (!canAddRoot(modelRef.current)) return [];
       const { at } = contextMenu;
       return [
         {
@@ -3522,7 +3523,7 @@ export function MindmapEditorView({
                 className="whitespace-nowrap text-slate-500"
               />
               <MultiRootToggle
-                multiRoot={model.multiRoot ?? true}
+                multiRoot={isMultiRoot(model)}
                 onChange={(next) => {
                   const state = dispatch({ type: "setMultiRoot", value: next });
                   saveNote(state.document.model);

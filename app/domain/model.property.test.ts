@@ -13,6 +13,7 @@ import fc from "fast-check";
 import {
   addChildToNode,
   addSiblingAfter,
+  canAddRoot,
   cloneModel,
   cloneWithNewIds,
   dedentNode,
@@ -158,7 +159,16 @@ describe("reorder / indent inverses", () => {
         const prev = cur.parent.children[cur.index - 1];
         expect(findParentAndIndex(indented, nodeId)!.parent.id).toBe(prev.id);
         expect(findNode(indented, prev.id)!.collapsed).toBe(false);
-        expect(shape(dedentNode(indented, nodeId))).toEqual(shape(model));
+        // Undoing the indent of a former top-level node would recreate a
+        // second tree — a single-root document (model.multiRoot === false)
+        // refuses that, so dedent stays a no-op instead of round-tripping.
+        const wasTopLevel = cur.parent.id === model.id;
+        const dedented = dedentNode(indented, nodeId);
+        if (wasTopLevel && !canAddRoot(indented)) {
+          expect(dedented).toBe(indented);
+        } else {
+          expect(shape(dedented)).toEqual(shape(model));
+        }
         expectUniqueIds(indented);
       })
     );

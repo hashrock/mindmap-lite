@@ -7,7 +7,7 @@ import {
   useLayoutEffect,
 } from "react";
 import { Link, router } from "@inertiajs/react";
-import { findNode } from "../domain/model";
+import { findNode, isMultiRoot } from "../domain/model";
 import type { UndoType } from "../application/editorReducer";
 import { pasteCommand } from "../application/editorCommands";
 import { outlineRows, verticalMoveInText } from "../application/outline";
@@ -368,7 +368,7 @@ export default function OutlineEditor({
         )}
         {noteId && !readOnly && (
           <MultiRootToggle
-            multiRoot={model.multiRoot ?? true}
+            multiRoot={isMultiRoot(model)}
             onChange={(next) => {
               const state = dispatch({ type: "setMultiRoot", value: next });
               saveNote(state.document.model);

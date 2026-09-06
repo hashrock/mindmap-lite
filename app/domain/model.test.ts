@@ -391,6 +391,26 @@ describe("dedentNode edge cases", () => {
     expect(getFlatOrder(result)).toEqual(getFlatOrder(model));
   });
 
+  it("promotes a depth-1 node to a new top-level tree by default", () => {
+    // sampleModel: root > [A > [A1], B]. A1's grandparent is root, so
+    // dedenting it lands A1 as a new top-level tree right after A.
+    const model = sampleModel();
+    const result = dedentNode(model, "a1");
+    expect(result.children.map((c) => c.id)).toEqual(["a", "a1", "b"]);
+  });
+
+  it("is a no-op (same reference) when single-root and a tree already exists", () => {
+    const model: MindMapModel = {
+      id: "root",
+      text: "Root",
+      multiRoot: false,
+      children: [
+        { id: "a", text: "A", children: [{ id: "a1", text: "A1", children: [] }] },
+      ],
+    };
+    expect(dedentNode(model, "a1")).toBe(model);
+  });
+
   it("is a no-op when nodeId is not found", () => {
     const model = sampleModel();
     const result = dedentNode(model, "nonexistent");

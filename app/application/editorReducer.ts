@@ -31,6 +31,8 @@ import {
   ensureTopLevelNode,
   placeBranchAt,
   addRootAt,
+  canAddRoot,
+  isMultiRoot,
   isTopLevel,
   generateId,
   cloneModel,
@@ -459,17 +461,15 @@ function documentReducer(
     }
 
     case "addRootAt": {
+      // Check before minting an id: a single-root note that already has its
+      // tree would just have addRootAt hand the id straight back unused.
+      if (!canAddRoot(document.model)) return { document };
       const newNode: MindMapModel = { id: nextId(), text: "", children: [] };
-      const newModel = addRootAt(document.model, newNode, {
-        x: action.x,
-        y: action.y,
-      });
-      // addRootAt returns the same reference when blocked (single-root note
-      // that already has a tree); keep the document identity so the reducer
-      // skips undo/save and the view doesn't focus a node that was never added.
-      if (newModel === document.model) return { document };
       return {
-        document: { ...document, model: newModel },
+        document: {
+          ...document,
+          model: addRootAt(document.model, newNode, { x: action.x, y: action.y }),
+        },
         focusId: newNode.id,
         focusCursorPos: 0,
         focusSelectionEnd: 0,
@@ -629,7 +629,7 @@ function documentReducer(
     }
 
     case "setMultiRoot": {
-      if ((document.model.multiRoot ?? true) === action.value) return { document };
+      if (isMultiRoot(document.model) === action.value) return { document };
       return {
         document: { ...document, model: { ...document.model, multiRoot: action.value } },
       };

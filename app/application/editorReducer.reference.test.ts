@@ -18,7 +18,7 @@
  */
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
-import { topLevelNodes, type IdSource, type MindMapModel } from "../domain/model";
+import { isMultiRoot, topLevelNodes, type IdSource, type MindMapModel } from "../domain/model";
 import { modelArb, sequentialIds, uncollapsed } from "../domain/model.arb";
 import { editorReducer, type EditorAction, type EditorState } from "./editorReducer";
 import { editorStateAt } from "./editorState.arb";
@@ -78,7 +78,12 @@ type RefAction =
   | { kind: "startEditing" }
   | { kind: "exitEditing" };
 
-function refStep(ref: Ref, action: RefAction, nextId: IdSource): Ref {
+function refStep(
+  ref: Ref,
+  action: RefAction,
+  nextId: IdSource,
+  multiRoot: boolean
+): Ref {
   const rows = ref.rows.map((r) => ({ ...r }));
   const i = rows.findIndex((r) => r.id === ref.active);
   let { active, editing } = ref;
@@ -118,6 +123,9 @@ function refStep(ref: Ref, action: RefAction, nextId: IdSource): Ref {
     case "dedent": {
       const k = parentOf(rows, i);
       if (k === null) return ref; // a tree root has no parent to leave
+      // Dedenting out from directly under a tree root would make the block a
+      // second tree — refused when the note is single-root (see dedentNode).
+      if (rows[k].depth === 0 && !multiRoot) return ref;
       const e = subtreeEnd(rows, k);
       // After the parent's whole subtree, one level up; later siblings stay.
       rows.splice(i, e - i, ...rows.slice(j, e), ...shift(block, -1));
@@ -286,6 +294,7 @@ describe("editorReducer vs. flat-outline reference", () => {
     fc.assert(
       fc.property(openModelArb, fc.array(stepArb, { maxLength: 30 }), (model, steps) => {
         const first = model.children[0];
+        const multiRoot = isMultiRoot(model);
         let state: EditorState = editorStateAt(model, first.id);
         let ref: Ref = { rows: toRows(model), active: first.id, editing: false };
         const reducerIds = sequentialIds();
@@ -302,7 +311,7 @@ describe("editorReducer vs. flat-outline reference", () => {
                 : { kind: s.kind };
           trail.push(action.kind);
           state = editorReducer(state, toAction(action, state, ref), reducerIds);
-          ref = refStep(ref, action, refIds);
+          ref = refStep(ref, action, refIds, multiRoot);
           const where = trail.join(" → ");
           expect(toRows(state.document.model), where).toEqual(ref.rows);
           expect(state.view.activeNodeId, where).toBe(ref.active);
