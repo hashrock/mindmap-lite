@@ -88,7 +88,7 @@ import ContextMenu, {
   type ContextMenuItem,
 } from "./ContextMenu";
 import PublicityDropdown from "./PublicityDropdown";
-import MultiRootToggle from "./MultiRootToggle";
+import MultiRootToggle, { multiRootOnChange } from "./MultiRootToggle";
 import {
   serializeModel,
   modelToText,
@@ -3524,10 +3524,7 @@ export function MindmapEditorView({
               />
               <MultiRootToggle
                 multiRoot={isMultiRoot(model)}
-                onChange={(next) => {
-                  const state = dispatch({ type: "setMultiRoot", value: next });
-                  saveNote(state.document.model);
-                }}
+                onChange={multiRootOnChange(dispatch, saveNote)}
               />
               <PublicityDropdown
                 isPublic={isPublic}

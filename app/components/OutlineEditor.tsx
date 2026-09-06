@@ -31,7 +31,7 @@ import {
 } from "../lib/measureText";
 import ConfirmDialog from "./ConfirmDialog";
 import PublicityDropdown from "./PublicityDropdown";
-import MultiRootToggle from "./MultiRootToggle";
+import MultiRootToggle, { multiRootOnChange } from "./MultiRootToggle";
 import ViewControls from "./ViewControls";
 import { TrashIcon } from "./icons";
 import type { NoteEditorEngine } from "./useNoteEditor";
@@ -369,10 +369,7 @@ export default function OutlineEditor({
         {noteId && !readOnly && (
           <MultiRootToggle
             multiRoot={isMultiRoot(model)}
-            onChange={(next) => {
-              const state = dispatch({ type: "setMultiRoot", value: next });
-              saveNote(state.document.model);
-            }}
+            onChange={multiRootOnChange(dispatch, saveNote)}
           />
         )}
         {noteId && !readOnly && (

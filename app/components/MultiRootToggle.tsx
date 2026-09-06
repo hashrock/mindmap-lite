@@ -1,3 +1,5 @@
+import type { MindMapModel } from "../domain/model";
+import type { EditorAction, EditorState, UndoType } from "../application/editorReducer";
 import { t } from "../application/i18n";
 import { useLocale } from "./useLocale";
 
@@ -5,6 +7,21 @@ interface Props {
   /** Current `MindMapModel.multiRoot` (absent counts as `true`). */
   multiRoot: boolean;
   onChange: (next: boolean) => void;
+}
+
+/**
+ * The toggle's `onChange` wiring — dispatch `setMultiRoot`, then persist the
+ * result — shared by both editor views (canvas/outline) so it exists once
+ * rather than as two identical inline closures.
+ */
+export function multiRootOnChange(
+  dispatch: (action: EditorAction, undoType?: UndoType) => EditorState,
+  saveNote: (model: MindMapModel) => void
+): (next: boolean) => void {
+  return (next) => {
+    const state = dispatch({ type: "setMultiRoot", value: next });
+    saveNote(state.document.model);
+  };
 }
 
 /**
