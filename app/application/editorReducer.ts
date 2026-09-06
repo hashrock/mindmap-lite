@@ -31,7 +31,6 @@ import {
   ensureTopLevelNode,
   placeBranchAt,
   addRootAt,
-  canAddRoot,
   isMultiRoot,
   isTopLevel,
   generateId,
@@ -461,9 +460,6 @@ function documentReducer(
     }
 
     case "addRootAt": {
-      // Check before minting an id: a single-root note that already has its
-      // tree would just have addRootAt hand the id straight back unused.
-      if (!canAddRoot(document.model)) return { document };
       const newNode: MindMapModel = { id: nextId(), text: "", children: [] };
       return {
         document: {

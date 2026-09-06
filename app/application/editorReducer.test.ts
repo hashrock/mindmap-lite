@@ -514,16 +514,6 @@ describe("insertNodes", () => {
     expect(next.view.editing).toBe(true);
   });
 
-  // Domain-level semantics (blocked vs. still-allowed) are covered directly
-  // against addRootAt in domain/model.test.ts; this just confirms the reducer
-  // treats a blocked add as a true no-op (same state reference, so undo/save
-  // are skipped) rather than re-testing addRootAt itself.
-  it("is a no-op when the note is single-root and a tree already exists", () => {
-    const model = { ...sampleModel(), multiRoot: false as const };
-    const state = stateAt(model, "a");
-    const next = editorReducer(state, { type: "addRootAt", x: 400, y: 50 });
-    expect(next).toBe(state);
-  });
 });
 
 describe("setMultiRoot", () => {

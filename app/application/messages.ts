@@ -232,7 +232,7 @@ export const MESSAGES_JA = {
   multiRootToggleOn: "マルチルート",
   multiRootToggleOff: "シングルルート",
   multiRootToggleOnDesc: "空きキャンバスの右クリックで複数のツリーを作成できます",
-  multiRootToggleOffDesc: "このノートは1つのツリーに制限されています",
+  multiRootToggleOffDesc: "このノートは1つのツリーとして扱います（右クリックからの追加を隠すだけの表示設定）",
 
   // --- 設定ページ ---
   settingsHeadTitle: "設定",
@@ -552,7 +552,7 @@ export const MESSAGES_EN = {
   multiRootToggleOn: "Multi-root",
   multiRootToggleOff: "Single-root",
   multiRootToggleOnDesc: "Right-click empty canvas to create more than one tree",
-  multiRootToggleOffDesc: "This note is restricted to a single tree",
+  multiRootToggleOffDesc: "Treats this note as a single tree (just hides the add-root menu)",
 
   // --- Settings page ---
   settingsHeadTitle: "Settings",

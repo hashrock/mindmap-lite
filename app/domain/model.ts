@@ -82,11 +82,13 @@ export interface MindMapModel {
   position?: NodePosition;
   /**
    * Meaningful only on the root (the invisible note-level container, see
-   * {@link topLevelNodes}). `false` restricts the document to a single
-   * top-level tree — the only mode before multi-root — by turning
-   * {@link addRootAt} into a no-op once one exists. Absent = `true`
-   * (multi-root, the default), so existing documents are unaffected and the
-   * common case adds no bytes (same trick as `StoredNodeType`).
+   * {@link topLevelNodes}). A per-note display preference — "this note is
+   * meant to stay a single tree" — surfaced by hiding the empty-canvas
+   * "add root" menu item ({@link isMultiRoot}); it is not an invariant, so
+   * `addRootAt` stays unconditional and existing multi-tree notes are never
+   * retroactively merged. Absent = `true` (multi-root, the default), so
+   * existing documents are unaffected and the common case adds no bytes
+   * (same trick as `StoredNodeType`).
    */
   multiRoot?: boolean;
 }
@@ -185,30 +187,12 @@ export function isMultiRoot(model: MindMapModel): boolean {
   return model.multiRoot !== false;
 }
 
-/**
- * Would another top-level tree be allowed? False once a single-root document
- * ({@link isMultiRoot} false) already has one — the shared guard behind every
- * way a new tree could be produced: {@link addRootAt} (the deliberate one)
- * and {@link dedentNode} (dedenting a depth-1 node would otherwise promote it
- * to a new tree). Checking this once here, rather than re-deriving the
- * condition at each call site, keeps them from drifting apart if the rule
- * ever changes (e.g. to a cap higher than one).
- */
-export function canAddRoot(model: MindMapModel): boolean {
-  return isMultiRoot(model) || model.children.length === 0;
-}
-
-/**
- * Add a blank tree root placed at a canvas position. No-op (same reference)
- * when {@link canAddRoot} says no — the single chokepoint that keeps the
- * single-root setting an actual invariant rather than just a hidden menu item.
- */
+/** Add a blank tree root placed at a canvas position. */
 export function addRootAt(
   model: MindMapModel,
   newNode: MindMapModel,
   position: NodePosition
 ): MindMapModel {
-  if (!canAddRoot(model)) return model;
   const cloned = cloneModel(model);
   cloned.children.push({ ...newNode, position: { ...position } });
   return cloned;
@@ -539,12 +523,7 @@ export function indentNode(
   return cloned;
 }
 
-/**
- * Dedent: move node to parent's level, after parent. No-op (same reference)
- * when the node is a depth-1 node and dedenting it would promote it to a new
- * top-level tree that {@link canAddRoot} says isn't allowed — otherwise
- * Shift+Tab would be a second, ungated way around the single-root cap.
- */
+/** Dedent: move node to parent's level, after parent. */
 export function dedentNode(
   model: MindMapModel,
   nodeId: string
@@ -555,7 +534,6 @@ export function dedentNode(
   if (!result) return cloned;
   const grandResult = findParentAndIndex(cloned, result.parent.id);
   if (!grandResult) return cloned;
-  if (grandResult.parent.id === cloned.id && !canAddRoot(model)) return model;
   const node = result.parent.children[result.index];
   result.parent.children.splice(result.index, 1);
   grandResult.parent.children.splice(grandResult.index + 1, 0, node);

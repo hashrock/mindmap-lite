@@ -8,11 +8,12 @@ interface Props {
 }
 
 /**
- * Per-note single/multi-root switch, rendered next to {@link PublicityDropdown}
- * in the editor header. `false` restricts the note to the one tree it already
- * has — enforced by `addRootAt` (see domain/model.ts), not just by this
- * button being absent — so there is nothing to configure beyond the flag
- * itself, hence a plain toggle rather than a dropdown.
+ * Per-note single/multi-root display preference, rendered next to
+ * {@link PublicityDropdown} in the editor header. `false` just hides the
+ * empty-canvas "add root" menu item — it is not an invariant, so `addRootAt`
+ * itself stays unconditional and existing multi-tree notes are left as-is.
+ * There is nothing else to configure beyond the flag, hence a plain toggle
+ * rather than a dropdown.
  */
 export default function MultiRootToggle({ multiRoot, onChange }: Props) {
   useLocale(); // 言語切り替えで再レンダー（t() の購読）

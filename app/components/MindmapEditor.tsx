@@ -11,7 +11,6 @@ import { Link, router } from "@inertiajs/react";
 import type { MindMapNode } from "../application/nodeUtils";
 import type { MindMapModel, NodeType } from "../domain/model";
 import {
-  canAddRoot,
   findNode,
   firstNavigableId,
   isMultiRoot,
@@ -1158,10 +1157,11 @@ export function MindmapEditorView({
     if (!contextMenu) return [];
     if (contextMenu.nodeId === undefined) {
       // Empty canvas: the one deliberate way to create a tree root. Hidden
-      // once a single-root note already has its one tree (addRootAt would
-      // otherwise silently no-op — see domain/model.ts).
+      // once a single-root note (MultiRootToggle off) already has its one
+      // tree — a display preference only: addRootAt itself stays unconditional.
       if (readOnly) return [];
-      if (!canAddRoot(modelRef.current)) return [];
+      const current = modelRef.current;
+      if (!isMultiRoot(current) && current.children.length > 0) return [];
       const { at } = contextMenu;
       return [
         {

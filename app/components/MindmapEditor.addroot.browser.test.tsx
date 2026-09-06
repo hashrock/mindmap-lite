@@ -123,14 +123,12 @@ describe("adding a tree root", () => {
   });
 
   it("offers nothing when the note is single-root and already has its one tree", async () => {
+    // A display preference only (MultiRootToggle / MindMapModel.multiRoot):
+    // it hides this menu item, but doesn't stop addRootAt from working if
+    // reached another way — there's no invariant to enforce here.
     const { rightClick } = await setup(false, { ...MODEL, multiRoot: false });
     rightClick(60, 100);
     await new Promise((r) => setTimeout(r, 200));
     expect(menuButton("Add root here")).toBeUndefined();
-    // The invariant lives in addRootAt itself (see domain/model.test.ts and
-    // editorReducer.test.ts for the childless / already-has-a-tree cases at
-    // the unit level) — every top-level document always has at least one
-    // tree in practice (`ensureTopLevelNode`), so a single-root note reaching
-    // this menu is always the "already has one" case this test covers.
   });
 });
