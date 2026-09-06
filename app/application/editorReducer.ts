@@ -31,6 +31,7 @@ import {
   ensureTopLevelNode,
   placeBranchAt,
   addRootAt,
+  isMultiRoot,
   isTopLevel,
   generateId,
   cloneModel,
@@ -232,6 +233,9 @@ export type EditorAction =
   // --- bulk / misc ---
   | { type: "insertNodes"; targetId: string; nodes: MindMapModel[] }
   | { type: "setTitle"; text: string }
+  // Per-note single/multi-root switch (settings UI). See
+  // `MindMapModel.multiRoot` for what it gates.
+  | { type: "setMultiRoot"; value: boolean }
   | { type: "replace"; state: EditorState };
 
 // --- Document reducer ---
@@ -620,6 +624,13 @@ function documentReducer(
       return { document: { ...document, model: nextModel } };
     }
 
+    case "setMultiRoot": {
+      if (isMultiRoot(document.model) === action.value) return { document };
+      return {
+        document: { ...document, model: { ...document.model, multiRoot: action.value } },
+      };
+    }
+
     // Pure view actions: the document never changes.
     case "moveUp":
     case "moveDown":
@@ -814,6 +825,7 @@ function viewReducer(
     case "setLinkMeta":
     case "setChecked":
     case "copyBranch":
+    case "setMultiRoot":
       return view;
 
     case "moveUp":

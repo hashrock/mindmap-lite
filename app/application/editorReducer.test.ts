@@ -513,6 +513,32 @@ describe("insertNodes", () => {
     expect(next.view.activeNodeId).toBe(roots[2].id);
     expect(next.view.editing).toBe(true);
   });
+
+});
+
+describe("setMultiRoot", () => {
+  it("sets the flag on the root", () => {
+    const model = sampleModel();
+    const next = editorReducer(stateAt(model, "a"), {
+      type: "setMultiRoot",
+      value: false,
+    });
+    expect(next.document.model.multiRoot).toBe(false);
+  });
+
+  it("is a no-op when the value is already in effect (absent counts as true)", () => {
+    const model = sampleModel();
+    const state = stateAt(model, "a");
+    const next = editorReducer(state, { type: "setMultiRoot", value: true });
+    expect(next).toBe(state);
+  });
+
+  it("leaves the view untouched", () => {
+    const model = sampleModel();
+    const state = stateAt(model, "a");
+    const next = editorReducer(state, { type: "setMultiRoot", value: false });
+    expect(next.view).toBe(state.view);
+  });
 });
 
 describe("setTitle", () => {

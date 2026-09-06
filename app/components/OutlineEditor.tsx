@@ -7,7 +7,7 @@ import {
   useLayoutEffect,
 } from "react";
 import { Link, router } from "@inertiajs/react";
-import { findNode } from "../domain/model";
+import { findNode, isMultiRoot } from "../domain/model";
 import type { UndoType } from "../application/editorReducer";
 import { pasteCommand } from "../application/editorCommands";
 import { outlineRows, verticalMoveInText } from "../application/outline";
@@ -31,6 +31,7 @@ import {
 } from "../lib/measureText";
 import ConfirmDialog from "./ConfirmDialog";
 import PublicityDropdown from "./PublicityDropdown";
+import MultiRootToggle, { multiRootOnChange } from "./MultiRootToggle";
 import ViewControls from "./ViewControls";
 import { TrashIcon } from "./icons";
 import type { NoteEditorEngine } from "./useNoteEditor";
@@ -363,6 +364,12 @@ export default function OutlineEditor({
             ref={saveStatusRef}
             data-testid="save-status"
             className="shrink-0 whitespace-nowrap text-xs text-slate-500"
+          />
+        )}
+        {noteId && !readOnly && (
+          <MultiRootToggle
+            multiRoot={isMultiRoot(model)}
+            onChange={multiRootOnChange(dispatch, saveNote)}
           />
         )}
         {noteId && !readOnly && (

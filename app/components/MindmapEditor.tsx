@@ -13,6 +13,7 @@ import type { MindMapModel, NodeType } from "../domain/model";
 import {
   findNode,
   firstNavigableId,
+  isMultiRoot,
   isTopLevel,
   subtreeIds,
 } from "../domain/model";
@@ -87,6 +88,7 @@ import ContextMenu, {
   type ContextMenuItem,
 } from "./ContextMenu";
 import PublicityDropdown from "./PublicityDropdown";
+import MultiRootToggle, { multiRootOnChange } from "./MultiRootToggle";
 import {
   serializeModel,
   modelToText,
@@ -1154,8 +1156,12 @@ export function MindmapEditorView({
   const contextMenuItems = useMemo<ContextMenuItem[]>(() => {
     if (!contextMenu) return [];
     if (contextMenu.nodeId === undefined) {
-      // Empty canvas: the one deliberate way to create a tree root.
+      // Empty canvas: the one deliberate way to create a tree root. Hidden
+      // once a single-root note (MultiRootToggle off) already has its one
+      // tree — a display preference only: addRootAt itself stays unconditional.
       if (readOnly) return [];
+      const current = modelRef.current;
+      if (!isMultiRoot(current) && current.children.length > 0) return [];
       const { at } = contextMenu;
       return [
         {
@@ -3515,6 +3521,10 @@ export function MindmapEditorView({
                 ref={saveStatusRef}
                 data-testid="save-status"
                 className="whitespace-nowrap text-slate-500"
+              />
+              <MultiRootToggle
+                multiRoot={isMultiRoot(model)}
+                onChange={multiRootOnChange(dispatch, saveNote)}
               />
               <PublicityDropdown
                 isPublic={isPublic}

@@ -203,6 +203,38 @@ describe("parseContent", () => {
     ]);
   });
 
+  it("keeps an explicit multiRoot: false and drops everything else (true is the default)", () => {
+    const json = JSON.stringify({
+      id: "r",
+      text: "Root",
+      multiRoot: false,
+      children: [{ id: "a", text: "a", children: [] }],
+    });
+    expect(parseContent(json, "ignored").multiRoot).toBe(false);
+    expect(
+      parseContent(
+        JSON.stringify({
+          id: "r",
+          text: "Root",
+          multiRoot: true,
+          children: [{ id: "a", text: "a", children: [] }],
+        }),
+        "ignored"
+      ).multiRoot
+    ).toBeUndefined();
+    expect(
+      parseContent(
+        JSON.stringify({
+          id: "r",
+          text: "Root",
+          multiRoot: "yes",
+          children: [{ id: "a", text: "a", children: [] }],
+        }),
+        "ignored"
+      ).multiRoot
+    ).toBeUndefined();
+  });
+
   it("preserves every declared NodeType through normalization", () => {
     // Guards the round-trip invariant that OPTIONAL_NODE_TYPES protects at
     // the type level: every non-default NodeType must survive normalizeTree

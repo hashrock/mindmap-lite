@@ -80,6 +80,17 @@ export interface MindMapModel {
    * nested under another.
    */
   position?: NodePosition;
+  /**
+   * Meaningful only on the root (the invisible note-level container, see
+   * {@link topLevelNodes}). A per-note display preference — "this note is
+   * meant to stay a single tree" — surfaced by hiding the empty-canvas
+   * "add root" menu item ({@link isMultiRoot}); it is not an invariant, so
+   * `addRootAt` stays unconditional and existing multi-tree notes are never
+   * retroactively merged. Absent = `true` (multi-root, the default), so
+   * existing documents are unaffected and the common case adds no bytes
+   * (same trick as `StoredNodeType`).
+   */
+  multiRoot?: boolean;
 }
 
 export interface NodePosition {
@@ -169,6 +180,11 @@ export function topLevelNodes(model: MindMapModel): MindMapModel[] {
  */
 export function isTopLevel(model: MindMapModel, nodeId: string): boolean {
   return model.children.some((c) => c.id === nodeId);
+}
+
+/** Resolves {@link MindMapModel.multiRoot}'s absent-means-true default. */
+export function isMultiRoot(model: MindMapModel): boolean {
+  return model.multiRoot !== false;
 }
 
 /** Add a blank tree root placed at a canvas position. */

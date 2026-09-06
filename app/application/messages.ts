@@ -228,6 +228,12 @@ export const MESSAGES_JA = {
   privateLabel: "非公開",
   copyLinkLabel: "リンクをコピー",
 
+  // --- マルチルート切り替え ---
+  multiRootToggleOn: "マルチルート",
+  multiRootToggleOff: "シングルルート",
+  multiRootToggleOnDesc: "空きキャンバスの右クリックで複数のツリーを作成できます",
+  multiRootToggleOffDesc: "このノートは1つのツリーとして扱います（右クリックからの追加を隠すだけの表示設定）",
+
   // --- 設定ページ ---
   settingsHeadTitle: "設定",
   projectSettings: "プロジェクト設定",
@@ -541,6 +547,12 @@ export const MESSAGES_EN = {
   publicLabel: "Public",
   privateLabel: "Private",
   copyLinkLabel: "Copy link",
+
+  // --- Multi-root toggle ---
+  multiRootToggleOn: "Multi-root",
+  multiRootToggleOff: "Single-root",
+  multiRootToggleOnDesc: "Right-click empty canvas to create more than one tree",
+  multiRootToggleOffDesc: "Treats this note as a single tree (just hides the add-root menu)",
 
   // --- Settings page ---
   settingsHeadTitle: "Settings",
