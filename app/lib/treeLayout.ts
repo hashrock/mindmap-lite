@@ -27,7 +27,10 @@ const NODE_MIN_HEIGHT = 40;
 const NODE_MIN_WIDTH = 100;
 const NODE_PADDING = 20;
 const HORIZONTAL_GAP = 120;
-const VERTICAL_GAP = 10;
+// Exported: dragDrop.ts and MindmapEditor.tsx derive their sibling-gap-sized
+// offsets from this so they stay in sync instead of re-typing the gap as an
+// independent constant.
+export const VERTICAL_GAP = 10;
 // Gap between the trees of a multi-root document (larger than the sibling gap
 // so separate trees read as separate).
 const TREE_GAP = 40;
