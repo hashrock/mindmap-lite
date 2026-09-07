@@ -37,7 +37,7 @@ import { zoomAt, panBy } from "../lib/panZoom";
 import { edgeScrollVelocity } from "../lib/dragAutoScroll";
 import { useNoteEditor, type NoteEditorEngine } from "./useNoteEditor";
 import { useTextInputHandlers } from "./useTextInputHandlers";
-import { layoutMindMap } from "../lib/treeLayout";
+import { layoutMindMap, VERTICAL_GAP } from "../lib/treeLayout";
 import {
   LINE_HEIGHT,
   lineHeightFor,
@@ -1596,9 +1596,11 @@ export function MindmapEditorView({
             listening: false,
           });
         } else {
-          // Insertion line in the middle of the sibling gap (VERTICAL_GAP=10).
+          // Insertion line in the middle of the sibling gap.
           const y =
-            drop.position === "before" ? target.y - h / 2 - 5 : target.y + h / 2 + 5;
+            drop.position === "before"
+              ? target.y - h / 2 - VERTICAL_GAP / 2
+              : target.y + h / 2 + VERTICAL_GAP / 2;
           const g = new Konva.Group({ listening: false });
           g.add(
             new Konva.Line({
