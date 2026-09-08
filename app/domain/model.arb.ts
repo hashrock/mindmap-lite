@@ -87,15 +87,13 @@ export const modelArb: fc.Arbitrary<MindMapModel> = fc
     },
     { requiredKeys: ["text", "children"] }
   )
-  .map(({ text, children, multiRoot }) => {
+  .map(({ children, ...rest }) => {
     const next = sequentialIds("n");
-    const model: MindMapModel = {
+    return {
       id: "root",
-      text,
+      ...rest,
       children: children.map((c) => assignIds(c, next, true)),
     };
-    if (multiRoot !== undefined) model.multiRoot = multiRoot;
-    return model;
   });
 
 /** Every id in the tree, root included, in DFS order (collapse ignored). */
