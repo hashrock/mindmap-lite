@@ -75,17 +75,27 @@ export const nodeArb: fc.Arbitrary<MindMapModel> = draftArb.map((d) =>
  * trees, ids `n0`… in DFS order.
  */
 export const modelArb: fc.Arbitrary<MindMapModel> = fc
-  .record({
-    text: nodeTextArb,
-    children: fc.array(draftArb, { minLength: 1, maxLength: 3 }),
-  })
-  .map(({ text, children }) => {
+  .record(
+    {
+      text: nodeTextArb,
+      children: fc.array(draftArb, { minLength: 1, maxLength: 3 }),
+      // Persistence round-trips only an explicit `false` — `true` is the
+      // implicit default and normalizeTree drops it on parse (see
+      // persistence.ts), so the generator must never produce a literal
+      // `true` or the roundtrip property would see it vanish.
+      multiRoot: fc.constant(false as const),
+    },
+    { requiredKeys: ["text", "children"] }
+  )
+  .map(({ text, children, multiRoot }) => {
     const next = sequentialIds("n");
-    return {
+    const model: MindMapModel = {
       id: "root",
       text,
       children: children.map((c) => assignIds(c, next, true)),
     };
+    if (multiRoot !== undefined) model.multiRoot = multiRoot;
+    return model;
   });
 
 /** Every id in the tree, root included, in DFS order (collapse ignored). */

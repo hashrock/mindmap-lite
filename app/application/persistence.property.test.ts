@@ -31,6 +31,7 @@ function expectWellFormed(node: MindMapModel) {
     if ("linkTitle" in n) expect(typeof n.linkTitle).toBe("string");
     if ("favicon" in n) expect(typeof n.favicon).toBe("string");
     if ("checked" in n) expect(typeof n.checked).toBe("boolean");
+    if ("multiRoot" in n) expect(n.multiRoot).toBe(false);
     if ("position" in n) {
       expect(Number.isFinite(n.position!.x)).toBe(true);
       expect(Number.isFinite(n.position!.y)).toBe(true);
