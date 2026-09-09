@@ -199,3 +199,24 @@ describe("imageCache as a state machine", () => {
     expect(ssr.getImageEntry("")).toBeUndefined();
   });
 });
+
+describe("imageCacheVersion (usertest #8: a load that finishes before anyone subscribed)", () => {
+  it("advances on every load/error — even with no listener — so a late subscriber's snapshot differs", async () => {
+    const m = await freshCache();
+    const v0 = m.imageCacheVersion();
+    m.getImageEntry("https://x.test/a.png");
+    m.getImageEntry("https://x.test/b.png");
+    expect(m.imageCacheVersion()).toBe(v0); // nothing has finished yet
+    created[0].naturalWidth = 10;
+    created[0].naturalHeight = 10;
+    created[0].onload?.(); // finishes with nobody subscribed
+    expect(m.imageCacheVersion()).toBe(v0 + 1);
+    // A subscriber arriving now sees a snapshot that already moved on, and
+    // still hears about the next completion.
+    let heard = 0;
+    m.subscribeImages(() => heard++);
+    created[1].onerror?.();
+    expect(m.imageCacheVersion()).toBe(v0 + 2);
+    expect(heard).toBe(1);
+  });
+});
