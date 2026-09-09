@@ -37,6 +37,7 @@ import {
 } from "./application/siteAi";
 import { extractLinkPreview } from "./utils/linkPreview";
 import { IMAGE_STORAGE_LIMIT_BYTES, totalImageBytes, exceedsImageQuota } from "./domain/imageStorage";
+import { scenarioRoutes } from "./scenarios";
 import type { Env } from "./global.d";
 
 const DEV_USER = {
@@ -662,6 +663,11 @@ app.post("/api/sites/:pubId/suggest", async (c) => {
     return c.json({ error: "AI request failed", detail: String(e) }, 502);
   }
 });
+
+// --- UI test scenarios: seed an isolated initial state and redirect to it ---
+// Public-safe (insert-only, current user's own data, no auth bypass); see
+// docs/ui-test-scenarios.md. Everything lives in app/scenarios/.
+app.route("/__scenarios", scenarioRoutes());
 
 // --- Link preview: server-side fetch of <title> + favicon (avoids CORS) ---
 app.get("/api/link-preview", async (c) => {
