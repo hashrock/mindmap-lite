@@ -7,9 +7,9 @@
  */
 import { describe, it, expect } from "vitest";
 import { SCENARIO_NAMES, SCENARIOS, findScenario, listScenarios, type ScenarioName } from "./catalog";
-import { LARGE_DEPTH, LARGE_LIST_NOTES, LARGE_WIDE_CHILDREN, buildStaticSite } from "./fixtures";
+import { LARGE_DEPTH, LARGE_LIST_NOTES, LARGE_WIDE_CHILDREN, SITE_SCENARIO_RECORDS } from "./fixtures";
 import { scenarioTitle, shortTag, type ScenarioContext, type ScenarioPlan } from "./plan";
-import { describePlan, resolveScenarioAccess, wantsJson } from "./response";
+import { describePlan, resolveScenarioAccess, throwawayUser, wantsJson } from "./response";
 import { parseContent, serializeModel } from "../application/persistence";
 import { findNode, getNodeDepths, topLevelNodes, type MindMapModel } from "../domain/model";
 import { validateSiteSave } from "../application/siteTemplate";
@@ -166,21 +166,9 @@ describe("individual scenarios", () => {
       true
     );
     expect(site.html).toContain("data-search");
-    expect((site.html.match(/data-card/g) ?? []).length).toBe(6);
+    expect((site.html.match(/data-card/g) ?? []).length).toBe(SITE_SCENARIO_RECORDS);
     expect(site.template).toContain("export default function Page()");
     expect(plans.site.redirect).toBe(`/sites/${site.publicationId}/edit`);
-  });
-
-  it("buildStaticSite escapes record text", () => {
-    const branch: MindMapModel = {
-      id: "b",
-      text: "<t>",
-      children: [{ id: "r", text: `x<script>"&`, children: [] }],
-    };
-    const { html } = buildStaticSite(branch);
-    expect(html).not.toContain("<script>");
-    expect(html).toContain("x&lt;script&gt;&quot;&amp;");
-    expect(html).toContain("<h1>&lt;t&gt;</h1>");
   });
 });
 
@@ -204,15 +192,38 @@ describe("route decisions", () => {
     expect(wantsJson(undefined, undefined)).toBe(false);
   });
 
-  it("resolveScenarioAccess: unknown → login-required → run", () => {
-    expect(resolveScenarioAccess("nope", user)).toEqual({ kind: "unknown" });
-    expect(resolveScenarioAccess("typical", null)).toMatchObject({ kind: "login-required" });
-    expect(resolveScenarioAccess("typical", user)).toMatchObject({ kind: "run", user });
+  it("resolveScenarioAccess (session auth): unknown → login-required → run as the current user", () => {
+    const ctx = { authKind: "session" as const, tag: "t", nextId: sequentialIds() };
+    expect(resolveScenarioAccess("nope", { ...ctx, user })).toEqual({ kind: "unknown" });
+    expect(resolveScenarioAccess("typical", { ...ctx, user: null })).toMatchObject({ kind: "login-required" });
+    expect(resolveScenarioAccess("typical", { ...ctx, user })).toMatchObject({
+      kind: "run",
+      actor: { kind: "current", user },
+    });
+  });
+
+  it("resolveScenarioAccess (bypass auth): always runs as a fresh throwaway user, signed in or not", () => {
+    const ctx = { authKind: "bypass" as const, tag: "ab12cd", nextId: sequentialIds() };
+    for (const current of [user, null]) {
+      const access = resolveScenarioAccess("typical", { ...ctx, user: current });
+      expect(access).toMatchObject({ kind: "run", actor: { kind: "throwaway" } });
+      if (access.kind !== "run") throw new Error("unreachable");
+      expect(access.actor.user).toEqual(throwawayUser("typical", "ab12cd", access.actor.user.id));
+      expect(access.actor.user.id).not.toBe(user.id);
+    }
+    expect(resolveScenarioAccess("nope", { ...ctx, user })).toEqual({ kind: "unknown" });
+  });
+
+  it("throwawayUser is recognisable and cannot collide with a real account", () => {
+    const u = throwawayUser("large", "ab12cd", "id-9");
+    expect(u.name).toBe("scenario-large-ab12cd");
+    expect(u.email).toBe("id-9@scenario.invalid");
   });
 
   it("describePlan lists absolute URLs for everything the plan created", () => {
     const plan = SCENARIOS.site.build({ tag: "t", nextId: sequentialIds() });
-    const out = describePlan(SCENARIOS.site, plan, "t", user, "http://localhost:5173/");
+    const out = describePlan(SCENARIOS.site, plan, "t", { kind: "current", user }, "http://localhost:5173/");
+    expect(out.signedInAs).toBe("current");
     expect(out.redirect).toBe(`http://localhost:5173${plan.redirect}`);
     expect(out.notes[0]).toMatchObject({
       id: plan.notes[0].id,

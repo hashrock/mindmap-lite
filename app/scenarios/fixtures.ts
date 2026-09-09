@@ -6,9 +6,9 @@
  */
 import { ensureTopLevelNode, type IdSource, type MindMapModel } from "../domain/model";
 import { toSiteNode } from "../application/siteNode";
-import { inferSchema, shapeRecords, defaultTemplate } from "../application/siteSchema";
-import type { SiteBuild } from "../application/siteTemplate";
+import { inferSchema, defaultTemplate } from "../application/siteSchema";
 import { scenarioTitle, type PlannedNote, type ScenarioContext, type ScenarioPlan } from "./plan";
+import { SITE_GOLDEN } from "./siteGolden";
 
 // --- 木の組み立て ---
 
@@ -211,64 +211,36 @@ export function buildPublic({ tag, nextId }: ScenarioContext): ScenarioPlan {
   return { notes: [main], publications: [publication], sites: [], redirect: `/notes/${main.id}` };
 }
 
-/** 公開済みサイト：公開ノート + ノード公開 + ビルド済みサイト（/sites/:pubId で配信される）。 */
+/** `site` シナリオが公開する枝。golden fixture（siteGolden.ts）はこの枝から作られる。 */
+export const SITE_SCENARIO_RECORDS = 6;
+export function siteScenarioBranch(nextId: IdSource): MindMapModel {
+  return catalogBranch(nextId, SITE_SCENARIO_RECORDS);
+}
+
+/**
+ * 公開済みサイト：公開ノート + ノード公開 + ビルド済みサイト（/sites/:pubId で配信される）。
+ *
+ * HTML/CSS は本物のコンパイラ（ono + UnoCSS。ブラウザの Worker と同じ
+ * `compileProject`）で既定テンプレートから作った golden fixture。
+ * siteGolden.test.ts が毎回コンパイルし直して一致を確かめるので、テンプレートや
+ * コンパイラが変わればテストが落ちて `UPDATE_GOLDEN=1` で更新することになる。
+ * 既定テンプレートは item.id を描かないので、ID が毎回違っても出力は同じ。
+ */
 export function buildSite({ tag, nextId }: ScenarioContext): ScenarioPlan {
-  const branch = catalogBranch(nextId, 6);
+  const branch = siteScenarioBranch(nextId);
   const main = plannedNote("main", nextId, scenarioTitle("site", tag), [branch], { isPublic: true });
   const publication = { id: nextId(), noteId: main.id, nodeId: branch.id };
-  const site = { publicationId: publication.id, ...buildStaticSite(branch) };
+  const site = {
+    publicationId: publication.id,
+    template: defaultTemplate(inferSchema(toSiteNode(branch))),
+    schema: "",
+    html: SITE_GOLDEN.html,
+    css: SITE_GOLDEN.css,
+  };
   return {
     notes: [main],
     publications: [publication],
     sites: [site],
     redirect: `/sites/${publication.id}/edit`,
   };
-}
-
-// --- サイトのビルド（サーバー側の代替） ---
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"]/g, (ch) =>
-    ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : "&quot;"
-  );
-}
-
-/**
- * 本物のビルドはブラウザの Web Worker でしか走らない（siteTemplate.ts 冒頭）ので、
- * シナリオでは既定テンプレート（`defaultTemplate`）と同じ構造の HTML をサーバーで
- * 直接組み立てる。`data-card` / `data-search` の契約（検索スクリプト）は守る。
- * template 列には本物の既定テンプレートを入れるので、エディタを開けば
- * そのまま再ビルド・再公開できる。
- */
-export function buildStaticSite(branch: MindMapModel): SiteBuild & { template: string; schema: string } {
-  const data = toSiteNode(branch);
-  const schema = inferSchema(data);
-  const { items } = shapeRecords(data, schema);
-  const cards = items
-    .map((item) => {
-      const fields = schema
-        .map((f) => {
-          const v = item[f.key];
-          if (v === undefined) return "";
-          if (Array.isArray(v)) return v.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("");
-          if (f.type === "image") return `<img src="${escapeHtml(v)}" alt="">`;
-          if (f.type === "link") return `<a href="${escapeHtml(v)}">${escapeHtml(v)}</a>`;
-          return `<p>${escapeHtml(v)}</p>`;
-        })
-        .join("");
-      return `<article data-card class="card"><h2>${escapeHtml(item.title)}</h2>${fields}</article>`;
-    })
-    .join("");
-  const html =
-    `<main class="page"><h1>${escapeHtml(branch.text)}</h1>` +
-    `<input data-search placeholder="検索…" class="search">` +
-    `<div class="grid">${cards}</div></main>`;
-  const css =
-    "body{margin:0;font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a}" +
-    ".page{min-height:100vh;padding:24px}.search{margin-top:16px;width:100%;box-sizing:border-box;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px}" +
-    ".grid{display:grid;gap:16px;margin-top:16px;grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}" +
-    ".card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px}.card h2{margin:0 0 8px;font-size:16px}" +
-    ".card p{margin:0 0 8px;color:#475569;font-size:14px}.card img{width:100%;max-height:12rem;object-fit:cover;border-radius:8px}" +
-    ".card a{color:#047857;word-break:break-all}.tag{display:inline-block;margin:4px 4px 0 0;background:#f1f5f9;border-radius:4px;padding:2px 6px;font-size:12px;color:#475569}";
-  return { template: defaultTemplate(schema), schema: "", html, css };
 }

@@ -7,8 +7,10 @@
  *                               リダイレクトせず、作った ID・URL を JSON で返す
  *
  * server.ts に `app.route("/__scenarios", scenarioRoutes())` で薄く mount する。
- * セッション（`c.get("user")`）は親の middleware が解決済み——ここでは認証を
- * 迂回しない。DEV_BYPASS_AUTH が有効なら親が Dev User でログイン済みにする。
+ * 認証は親の middleware が選んだ AuthProvider（`c.get("auth")`）に任せる：
+ * バイパス時はシナリオ専用の使い捨てユーザーを作って `auth.signIn`、本番では
+ * ログイン中ユーザーのデータとして作る（response.ts の `resolveScenarioAccess`）。
+ * Cookie やミドルウェアをここで直接触ることはない。
  */
 import { Hono } from "hono";
 import { html } from "hono/html";
@@ -18,6 +20,7 @@ import { generateId } from "../domain/model";
 import { listScenarios } from "./catalog";
 import { shortTag } from "./plan";
 import { applyScenarioPlan } from "./seed";
+import { insertUser } from "../utils/userRepository";
 import { LOGIN_PATH, SCENARIOS_PATH, describePlan, resolveScenarioAccess, wantsJson } from "./response";
 
 export function scenarioRoutes() {
@@ -26,7 +29,7 @@ export function scenarioRoutes() {
   r.get("/", (c) => {
     const user = c.get("user");
     const reason = c.req.query("reason");
-    const bypass = !!c.env.DEV_BYPASS_AUTH;
+    const bypass = c.get("auth").kind === "bypass";
     const rows = listScenarios().map(
       (s) => html`<tr>
         <td><code>${s.name}</code></td>
@@ -38,10 +41,10 @@ export function scenarioRoutes() {
         </td>
       </tr>`
     );
-    const status = user
-      ? html`<p class="ok">ログイン中: ${user.name || user.email}（<code>${user.id}</code>）。シナリオはこのユーザーの新規データとして作られます。</p>`
-      : bypass
-        ? html`<p class="warn">未ログイン（DEV_BYPASS_AUTH は有効ですがゲストモードです）。<a href="${SCENARIOS_PATH}?guest=0">Dev User に戻す</a>と実行できます。</p>`
+    const status = bypass
+      ? html`<p class="ok">認証バイパス中${user ? html`（いまは ${user.name || user.email}）` : "（ゲストモード）"}。シナリオごとに使い捨てユーザーを作り、そのユーザーでログインした状態になります。</p>`
+      : user
+        ? html`<p class="ok">ログイン中: ${user.name || user.email}（<code>${user.id}</code>）。シナリオはこのユーザーの新規データとして作られます。</p>`
         : html`<p class="warn">未ログイン。シナリオはログイン済みユーザーのデータとして作るので、先に<a href="${LOGIN_PATH}">Google でログイン</a>してください。</p>`;
     return c.html(html`<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -63,7 +66,9 @@ ${status}
   r.get("/:name", async (c) => {
     const json = wantsJson(c.req.query("format"), c.req.header("Accept"));
     const name = c.req.param("name");
-    const access = resolveScenarioAccess(name, c.get("user"));
+    const auth = c.get("auth");
+    const tag = shortTag();
+    const access = resolveScenarioAccess(name, { user: c.get("user"), authKind: auth.kind, tag, nextId: generateId });
     c.header("Cache-Control", "no-store");
 
     switch (access.kind) {
@@ -79,12 +84,17 @@ ${status}
           ? c.json({ error: "login-required", loginUrl: LOGIN_PATH, scenariosUrl: SCENARIOS_PATH }, 401)
           : c.redirect(`${SCENARIOS_PATH}?reason=login-required&scenario=${encodeURIComponent(name)}`, 303);
       case "run": {
-        const tag = shortTag();
+        const db = drizzle(c.env.DB);
+        const { actor } = access;
+        if (actor.kind === "throwaway") {
+          await insertUser(db, actor.user);
+          await auth.signIn(c, actor.user);
+        }
         const plan = access.scenario.build({ tag, nextId: generateId });
-        await applyScenarioPlan(drizzle(c.env.DB), plan, access.user.id, c.env.ENCRYPTION_KEY);
+        await applyScenarioPlan(db, plan, actor.user.id, c.env.ENCRYPTION_KEY);
         if (!json) return c.redirect(plan.redirect, 303);
         const origin = new URL(c.req.url).origin;
-        return c.json(describePlan(access.scenario, plan, tag, access.user, origin));
+        return c.json(describePlan(access.scenario, plan, tag, actor, origin));
       }
     }
   });

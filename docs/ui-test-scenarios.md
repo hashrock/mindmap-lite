@@ -12,13 +12,26 @@ Chrome MCP などのブラウザ自動操作で UI を試すとき、毎回手�
 | `GET /__scenarios/:name` | シナリオの初期状態を**毎回新規に**作り、テスト対象の画面へ `303` でリダイレクトする |
 | `GET /__scenarios/:name?format=json`（または `Accept: application/json`） | リダイレクトせず、作成した ID・URL・ユーザーを JSON で返す |
 
-未知の名前は `404`。未ログインなら HTML では一覧ページへ `303`（理由を表示）、JSON では `401` で `loginUrl` を返す。
+未知の名前は `404`。本番で未ログインなら HTML では一覧ページへ `303`（理由を表示）、JSON では `401` で `loginUrl` を返す。
+
+## 誰のデータとして作られるか（AuthProvider）
+
+ログイン状態は `app/auth/` の **AuthProvider**（`resolve` / `signIn` / `signOut`）が一手に決める。`selectAuth(env)` が env から 1 つ選び、ミドルウェアは `c.set("user", await auth.resolve(c))` するだけ。
+
+| 環境 | プロバイダ | シナリオの持ち主 | JSON の `signedInAs` |
+|---|---|---|---|
+| ローカル（`DEV_BYPASS_AUTH` 有効） | `bypassAuth` | **シナリオごとの使い捨てユーザー**（`scenario-<name>-<tag>`、`<id>@scenario.invalid`）を作り、`auth.signIn` でそのユーザーとしてログインした状態になる。既存の Dev User のデータとは完全に隔離され、`empty` の一覧はそのノート 1 件だけ | `throwaway` |
+| 本番（session 認証） | `sessionAuth` | ログイン中ユーザーの新規データ。未ログインなら通常のログイン導線へ | `current` |
+
+- `bypassAuth` の `signIn` は署名付き `dev_impersonate` Cookie を書く（1 日）。`resolve` は `?guest=1` → impersonate Cookie → Dev User の順。ゲスト状態から `signIn` するとゲストは解除される。
+- 本番の `sessionAuth` は `dev_impersonate` Cookie を一切読まない（`app/auth/auth.test.ts` で固定）。本番で任意ユーザーとしてログインする経路は無い。
+- 各シナリオは毎回新しいユーザーを作るので、同じユーザーに複数シナリオを積むことはできない（隔離を優先）。Dev User に戻るには `/auth/logout`（impersonate Cookie を消す）。
 
 ## 安全性（本番でも公開してよい）
 
-- **INSERT しかしない。** 既存のノート・公開・サイトを更新・削除する経路が無い（`app/scenarios/seed.ts`）。
-- **自分のデータだけ。** シナリオは「いまログインしているユーザー」の新規データとして作られる。ノートのタイトルはすべて `scenario-<name>-<6桁ランダム>` で始まるので、あとから一覧で見分けて捨てられる。
-- **認証を迂回しない。** セッションは通常の middleware が解決する。ローカルでは `DEV_BYPASS_AUTH` により Dev User でログイン済みになるので、そのまま使える。本番で使うなら先に Google でログインする。
+- **INSERT / UPSERT しかしない。** 既存のノート・公開・サイトを更新・削除する経路が無い（`app/scenarios/seed.ts` → `app/utils/noteRepository.ts`。server.ts のハンドラと同じ書き込み関数）。
+- **自分のデータだけ。** 本番ではログイン中ユーザーの新規データとして作られる。ノートのタイトルはすべて `scenario-<name>-<6桁ランダム>` で始まるので、あとから一覧で見分けて捨てられる。
+- **認証を迂回しない。** 使い捨てユーザーでの `signIn` は `bypassAuth` のときだけ（`resolveScenarioAccess` が `auth.kind` で分岐）。
 
 ## シナリオ一覧
 
@@ -31,7 +44,11 @@ Chrome MCP などのブラウザ自動操作で UI を試すとき、毎回手�
 | `public` | 公開ノート + 枝のノード公開。`/pub/:id.json` `/pub/:id.md` が生きていて、サイトはまだ無い（サイトエディタは下書き状態） | `/notes/:id`（閲覧ページ） |
 | `site` | 公開ノート + ノード公開 + ビルド済みサイト。`/sites/:pubId` で配信され、サイトエディタは「公開済み」になる | `/sites/:pubId/edit` |
 
-`site` の HTML/CSS は本物のビルド（ブラウザの Web Worker で JSX をコンパイル）ではなく、既定テンプレートと同じ構造をサーバー側で組み立てた静的な代替。`template` 列には本物の既定テンプレートが入っているので、エディタから再ビルド・再公開すると本物に置き換わる。
+`site` の HTML/CSS は **golden fixture**（`app/scenarios/siteGolden.ts`）。ブラウザの Worker と同じコンパイラ（ono + UnoCSS）で既定テンプレートから作った本物の成果物で、`siteGolden.test.ts` が毎回コンパイルし直して一致を検証する。テンプレートやコンパイラを変えたら次のコマンドで更新する：
+
+```bash
+UPDATE_GOLDEN=1 pnpm vitest run --project node app/scenarios/siteGolden.test.ts
+```
 
 ## Chrome MCP からの使い方
 
@@ -46,7 +63,8 @@ Chrome MCP などのブラウザ自動操作で UI を試すとき、毎回手�
    {
      "scenario": "site",
      "tag": "3f9a1c",
-     "user": { "id": "dev-user", "email": "dev@localhost", "name": "Dev User" },
+     "user": { "id": "<uuid>", "email": "<uuid>@scenario.invalid", "name": "scenario-site-3f9a1c" },
+     "signedInAs": "throwaway",
      "redirect": "http://localhost:5173/sites/<pubId>/edit",
      "notes": [{ "key": "main", "id": "…", "title": "scenario-site-3f9a1c", "isPublic": true, "editUrl": "…", "viewUrl": "…" }],
      "publications": [{ "id": "<pubId>", "jsonUrl": "…/pub/<pubId>.json", "markdownUrl": "…/pub/<pubId>.md", "siteEditUrl": "…" }],
@@ -57,6 +75,8 @@ Chrome MCP などのブラウザ自動操作で UI を試すとき、毎回手�
 3. ブラウザで `redirect`（または `notes[].editUrl` など任意の URL）を開いて操作する。
    ID を控える必要がなければ、ブラウザで直接 `http://localhost:5173/__scenarios/typical` を開くだけでよい。
 
+   注意: ログイン状態は Cookie なので、curl で作った使い捨てユーザーにブラウザはなっていない。ブラウザで操作するならブラウザで `/__scenarios/<name>` を開く（JSON は `?format=json` を付けて同じブラウザで開けば Cookie も揃う）。
+
 `notes[].key` は計画内での役割（`main` / `pinned` / `public` / `list-1` …）で、同じシナリオを何度実行しても変わらない。
 
 ## シナリオを足すとき
@@ -66,4 +86,6 @@ Chrome MCP などのブラウザ自動操作で UI を試すとき、毎回手�
 3. `app/scenarios/scenarios.test.ts` の共通テストが自動で走る。固有の期待があれば足す。
 4. この表を更新する。
 
-テスト: `pnpm vitest run --project node app/scenarios`
+テスト: `pnpm vitest run --project node app/scenarios app/auth`
+
+ハンドラを DB なしでテストするには、固定ユーザーを返すモック AuthProvider を `authMiddleware` に渡す（例: `app/scenarios/routes.test.ts`）。
