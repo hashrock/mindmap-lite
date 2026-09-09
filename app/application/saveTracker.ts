@@ -81,8 +81,35 @@ export function beginSave(tracker: SaveTracker): SaveTracker {
   return { ...tracker, issued: tracker.issued + 1 };
 }
 
-/** 保存 `seq` の結末。成功は保存できた内容を運ぶ。 */
-export type SaveOutcome = { ok: true; content: string } | { ok: false };
+/**
+ * 保存が失敗した理由。ヘッダーの文言と「次に何をすればよいか」を決める
+ * （文言は messages.ts の `saveFailed*`）。
+ *
+ * - `auth`: 401/403/404 — ログインが切れたか、このノートにもう書けない。
+ *   自動再試行しても直らないので、ログインし直す案内と内容の退避を促す。
+ * - `server`: 5xx — サーバー側の一時的な不調。自動再試行で直る見込み。
+ * - `network`: fetch 自体が失敗（オフライン等）。自動再試行で直る見込み。
+ * - `other`: それ以外の 4xx（送った内容が受け付けられない）。
+ */
+export type SaveFailureReason = "auth" | "server" | "network" | "other";
+
+/** HTTP ステータス（fetch 失敗は null）を {@link SaveFailureReason} に分類する。 */
+export function classifySaveFailure(status: number | null): SaveFailureReason {
+  if (status === null) return "network";
+  if (status === 401 || status === 403 || status === 404) return "auth";
+  if (status >= 500) return "server";
+  return "other";
+}
+
+/** 自動再試行で直る見込みがある失敗か（auth/other は人の手が要る）。 */
+export function isRetryableFailure(reason: SaveFailureReason): boolean {
+  return reason === "server" || reason === "network";
+}
+
+/** 保存 `seq` の結末。成功は保存できた内容を、失敗は理由を運ぶ。 */
+export type SaveOutcome =
+  | { ok: true; content: string }
+  | { ok: false; reason?: SaveFailureReason };
 
 /**
  * 応答を取り込んだ結果、ヘッダーに出すべき表示。`null` = 追い越された応答なので
