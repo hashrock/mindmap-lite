@@ -33,8 +33,10 @@ import ConfirmDialog from "./ConfirmDialog";
 import PublicityDropdown from "./PublicityDropdown";
 import MultiRootToggle, { multiRootOnChange } from "./MultiRootToggle";
 import ViewControls from "./ViewControls";
+import SaveStatus from "./SaveStatus";
 import { TrashIcon } from "./icons";
-import type { NoteEditorEngine } from "./useNoteEditor";
+import { leaveDialogMessage, type NoteEditorEngine } from "./useNoteEditor";
+import { renderMarkdownHtml } from "../lib/markdownHtml";
 import { useTextInputHandlers } from "./useTextInputHandlers";
 import { t } from "../application/i18n";
 import { useLocale } from "./useLocale";
@@ -88,7 +90,10 @@ export default function OutlineEditor({
     dispatch,
     saveNote,
     saveStatusRef,
+    saveFailure,
+    retrySave,
     copyPublicLink,
+    openPublicPage,
     isPublic,
     setIsPublic,
     undo,
@@ -288,7 +293,7 @@ export default function OutlineEditor({
         open={leaveConfirm !== null}
         variant="danger"
         title={t("saveFailedTitle")}
-        message={t("leaveMessage")}
+        message={leaveDialogMessage(saveFailure)}
         confirmLabel={t("leaveConfirm")}
         cancelLabel={t("leaveCancel")}
         onConfirm={() => {
@@ -302,7 +307,13 @@ export default function OutlineEditor({
       />
 
       {/* Header */}
-      <header className="anim-header flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3">
+      {/* Same structure and order as the canvas header (usertest #5): a
+          left cluster [× title ✎] that only takes the width it needs, and a
+          right-aligned cluster [view controls][status][multi-root][publicity].
+          The title is NOT a full-width click target, so a click aimed at the
+          view controls from the other layout never opens title editing. */}
+      <header className="anim-header flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 md:px-6">
+        <div className="flex min-w-0 items-center gap-2">
         {!embed && (
           <Link
             href="/notes"
@@ -326,7 +337,7 @@ export default function OutlineEditor({
           </Link>
         )}
         {readOnly ? (
-          <div className="flex min-w-0 flex-1 px-1">{titleSpan}</div>
+          <div className="flex min-w-0 px-1">{titleSpan}</div>
         ) : editingTitle ? (
           <input
             type="text"
@@ -341,18 +352,21 @@ export default function OutlineEditor({
               if (e.nativeEvent.isComposing) return;
               if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur();
             }}
-            className="h-8 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+            className="h-8 min-w-0 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             placeholder={t("titlePlaceholder")}
           />
         ) : (
           <button
             onClick={() => setEditingTitle(true)}
-            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 py-1 text-left hover:bg-slate-100"
+            className="flex min-w-0 items-center gap-1.5 rounded-lg px-1 py-1 text-left hover:bg-slate-100"
+            title={t("editTitle")}
           >
             {titleSpan}
             <span className="shrink-0 text-sm text-slate-400">✎</span>
           </button>
         )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2 text-xs md:gap-3">
         {onLayoutChange && (
           <ViewControls
             layout={layout ?? "outline"}
@@ -360,17 +374,21 @@ export default function OutlineEditor({
           />
         )}
         {noteId && !readOnly && (
-          <span
-            ref={saveStatusRef}
-            data-testid="save-status"
-            className="shrink-0 whitespace-nowrap text-xs text-slate-500"
+          <SaveStatus
+            statusRef={saveStatusRef}
+            failure={saveFailure}
+            onRetry={retrySave}
           />
         )}
+        {/* The multi-tree switch governs a canvas-only gesture (right-click on
+            empty canvas); on a phone-width header it has no room and no use. */}
         {noteId && !readOnly && (
-          <MultiRootToggle
-            multiRoot={isMultiRoot(model)}
-            onChange={multiRootOnChange(dispatch, saveNote)}
-          />
+          <span className="hidden md:inline-flex">
+            <MultiRootToggle
+              multiRoot={isMultiRoot(model)}
+              onChange={multiRootOnChange(dispatch, saveNote)}
+            />
+          </span>
         )}
         {noteId && !readOnly && (
           <PublicityDropdown
@@ -380,6 +398,7 @@ export default function OutlineEditor({
               saveNote(model, next);
             }}
             onCopyLink={copyPublicLink}
+            onOpenPublicPage={openPublicPage}
           />
         )}
         {!noteId && !readOnly && onSaveToAccount && (
@@ -395,6 +414,7 @@ export default function OutlineEditor({
             {t("saveButton")}
           </button>
         )}
+        </div>
       </header>
 
       {/* Outline body */}
@@ -504,7 +524,17 @@ export default function OutlineEditor({
                       className="min-w-0 flex-1 cursor-text py-0.5"
                       style={ROW_CONTENT_STYLE}
                     >
-                      {type === "image" ? (
+                      {type === "markdown" && !isEditingThis && node.text.trim() !== "" ? (
+                        // A markdown node shows its rendered document, as the
+                        // canvas panel does — not the raw `##` / `**` source
+                        // (usertest #7). Clicking still edits the source.
+                        <div
+                          data-testid="outline-md-preview"
+                          className="md-body rounded-lg border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm"
+                          // Sanitized by renderMarkdownHtml (DOMPurify).
+                          dangerouslySetInnerHTML={{ __html: renderMarkdownHtml(node.text) }}
+                        />
+                      ) : type === "image" ? (
                         node.text ? (
                           <img
                             src={node.text}
@@ -616,12 +646,15 @@ export default function OutlineEditor({
       {/* Bottom action bar: structural edits for touch (no hardware keyboard). */}
       {!readOnly && (
         <div className="flex shrink-0 items-stretch justify-around gap-1 border-t border-slate-200 bg-white px-1 py-1.5">
+          {/* Each button carries a short visible caption under its glyph —
+              the glyphs alone (⇤ ⇥ ↑ ↓) meant nothing to a first-time user
+              (usertest #16). */}
           {(
             [
-              { label: "⇤", title: t("kmOutdent"), type: "tab" as const, shift: true },
-              { label: "⇥", title: t("kmIndent"), type: "tab" as const, shift: false },
-              { label: "↑", title: t("moveUpTitle"), type: "moveNodeUp" as const },
-              { label: "↓", title: t("moveDownTitle"), type: "moveNodeDown" as const },
+              { label: "⇤", caption: t("tbOutdent"), title: t("kmOutdent"), type: "tab" as const, shift: true },
+              { label: "⇥", caption: t("tbIndent"), title: t("kmIndent"), type: "tab" as const, shift: false },
+              { label: "↑", caption: t("tbMoveUp"), title: t("moveUpTitle"), type: "moveNodeUp" as const },
+              { label: "↓", caption: t("tbMoveDown"), title: t("moveDownTitle"), type: "moveNodeDown" as const },
             ]
           ).map((b) => (
             <button
@@ -636,18 +669,20 @@ export default function OutlineEditor({
                     : { type: b.type }
                 )
               }
-              className="flex-1 rounded-lg py-2 text-lg text-slate-700 disabled:text-slate-300 enabled:hover:bg-slate-100 enabled:active:bg-slate-200"
+              className="flex flex-1 flex-col items-center rounded-lg py-1 text-slate-700 disabled:text-slate-300 enabled:hover:bg-slate-100 enabled:active:bg-slate-200"
             >
-              {b.label}
+              <span className="text-lg leading-6">{b.label}</span>
+              <span className="text-[10px] leading-3">{b.caption}</span>
             </button>
           ))}
           <button
             title={t("addItem")}
             disabled={!activeNodeId}
             onClick={() => withSave("insert-sibling", { type: "insertSiblingAfter" })}
-            className="flex-1 rounded-lg py-2 text-lg font-semibold text-emerald-700 disabled:text-slate-300 enabled:hover:bg-emerald-50 enabled:active:bg-emerald-100"
+            className="flex flex-1 flex-col items-center rounded-lg py-1 font-semibold text-emerald-700 disabled:text-slate-300 enabled:hover:bg-emerald-50 enabled:active:bg-emerald-100"
           >
-            ＋
+            <span className="text-lg leading-6">＋</span>
+            <span className="text-[10px] font-medium leading-3">{t("tbAdd")}</span>
           </button>
           <button
             title={t("deleteItem")}
@@ -656,9 +691,10 @@ export default function OutlineEditor({
               if (activeNodeId)
                 withSave("delete", { type: "deleteNode", nodeId: activeNodeId });
             }}
-            className="flex flex-1 items-center justify-center rounded-lg py-2 text-rose-600 disabled:text-slate-300 enabled:hover:bg-rose-50 enabled:active:bg-rose-100"
+            className="flex flex-1 flex-col items-center rounded-lg py-1 text-rose-600 disabled:text-slate-300 enabled:hover:bg-rose-50 enabled:active:bg-rose-100"
           >
-            <TrashIcon width="20" height="20" />
+            <span className="flex h-6 items-center"><TrashIcon width="18" height="18" /></span>
+            <span className="text-[10px] leading-3">{t("tbDelete")}</span>
           </button>
         </div>
       )}

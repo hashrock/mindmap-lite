@@ -2,6 +2,7 @@ import { Head, Link, router } from "@inertiajs/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ContextMenu from "../../components/ContextMenu";
 import {
+  GlobeIcon,
   LinkIcon,
   MoreVerticalIcon,
   PencilIcon,
@@ -290,6 +291,19 @@ export default function NotesIndex({
               disabled: !menu.note.isPublic,
               disabledReason: privateNoteCopyReason(),
               onSelect: () => copyLink(menu.note),
+            },
+            {
+              // 公開した相手にどう見えるかを自分で確かめる導線（usertest #6）。
+              label: t("openPublicPage"),
+              icon: <GlobeIcon />,
+              disabled: !menu.note.isPublic,
+              disabledReason: privateNoteCopyReason(),
+              onSelect: () =>
+                window.open(
+                  publicNoteUrl(window.location.origin, menu.note.id),
+                  "_blank",
+                  "noopener"
+                ),
             },
             {
               label: menu.note.pinned ? t("menuUnpin") : t("menuPin"),

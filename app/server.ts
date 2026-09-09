@@ -38,6 +38,7 @@ import {
 import { extractLinkPreview } from "./utils/linkPreview";
 import { IMAGE_STORAGE_LIMIT_BYTES, totalImageBytes, exceedsImageQuota } from "./domain/imageStorage";
 import { scenarioRoutes } from "./scenarios";
+import { notFoundHtml, wantsJsonNotFound } from "./application/notFoundPage";
 import type { Env } from "./global.d";
 
 const app = new Hono<Env>();
@@ -618,6 +619,18 @@ app.post("/api/sites/:pubId/suggest", async (c) => {
 // Public-safe (insert-only, current user's own data, no auth bypass); see
 // docs/ui-test-scenarios.md. Everything lives in app/scenarios/.
 app.route("/__scenarios", scenarioRoutes());
+
+// --- 404: a real page with a way back, not Hono's bare text (usertest #13) ---
+// Every `c.notFound()` in the routes above lands here.
+app.notFound((c) => {
+  const path = new URL(c.req.url).pathname;
+  // NotFoundHandler is typed as a text response; both bodies below are real
+  // Responses with status 404, the cast only satisfies that nominal type.
+  const res = wantsJsonNotFound(path, c.req.header("accept"))
+    ? c.json({ error: "Not found" }, 404)
+    : c.html(notFoundHtml(), 404);
+  return res as unknown as ReturnType<typeof c.notFound>;
+});
 
 // --- Link preview: server-side fetch of <title> + favicon (avoids CORS) ---
 app.get("/api/link-preview", async (c) => {

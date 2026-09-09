@@ -202,9 +202,11 @@ export type EditorAction =
       anchorOffset: number;
       focusOffset: number;
     }
-  // Insert an empty sibling right after the active node and edit it (Enter in
-  // selection mode). Falls back to a child when the root is active.
-  | { type: "insertSiblingAfter" }
+  // Insert an empty sibling right after the active node (or `nodeId` when
+  // given — the context menu targets the right-clicked node, which need not be
+  // active) and edit it (Enter in selection mode). Falls back to a child when
+  // a tree root is the target.
+  | { type: "insertSiblingAfter"; nodeId?: string }
   // --- context-menu node ops ---
   | { type: "toggleCollapse"; nodeId: string }
   | { type: "addChild"; nodeId: string }
@@ -509,12 +511,13 @@ function documentReducer(
     }
 
     case "insertSiblingAfter": {
-      if (!activeNodeId) return { document };
+      const afterId = action.nodeId ?? activeNodeId;
+      if (!afterId || !findNode(document.model, afterId)) return { document };
       const newNode: MindMapModel = { id: nextId(), text: "", children: [] };
       return {
         document: {
           ...document,
-          model: addSiblingAfter(document.model, activeNodeId, newNode),
+          model: addSiblingAfter(document.model, afterId, newNode),
         },
         focusId: newNode.id,
         focusCursorPos: 0,

@@ -10,6 +10,8 @@ import {
   offsetToAnchor,
   centerOffset,
   ensureVisibleOffset,
+  fitTransform,
+  unionRect,
   type ViewTransform,
 } from "./viewport";
 
@@ -159,5 +161,57 @@ describe("ensureVisibleOffset", () => {
     expect(out.changed).toBe(true);
     const right = (r.x + r.width) * t.scale + out.offsetX;
     expect(right).toBeCloseTo(screen.width - padding, 9);
+  });
+});
+
+describe("unionRect", () => {
+  it("is null for no rects", () => {
+    expect(unionRect([])).toBeNull();
+  });
+  it("spans every rect, including ones with negative coordinates", () => {
+    expect(
+      unionRect([
+        { x: -10, y: 5, width: 20, height: 10 },
+        { x: 100, y: -40, width: 30, height: 5 },
+      ])
+    ).toEqual({ x: -10, y: -40, width: 140, height: 55 });
+  });
+});
+
+describe("fitTransform (全体表示)", () => {
+  const screen = { width: 800, height: 600 };
+
+  it("shrinks a document larger than the viewport so all of it is visible, with the padding kept", () => {
+    const bounds = { x: 0, y: 0, width: 2400, height: 1000 };
+    const t = fitTransform(bounds, screen, 40, 1, 0.2);
+    // Width is the binding axis: (800 - 80) / 2400.
+    expect(t.scale).toBeCloseTo(720 / 2400);
+    const topLeft = worldToScreen({ x: 0, y: 0 }, t);
+    const bottomRight = worldToScreen({ x: 2400, y: 1000 }, t);
+    expect(topLeft.x).toBeCloseTo(40);
+    expect(bottomRight.x).toBeCloseTo(760);
+    // Centred on the other axis.
+    expect((topLeft.y + bottomRight.y) / 2).toBeCloseTo(300);
+  });
+
+  it("never enlarges a small document past maxScale, and centres it", () => {
+    const bounds = { x: 100, y: 100, width: 50, height: 20 };
+    const t = fitTransform(bounds, screen, 40, 1, 0.2);
+    expect(t.scale).toBe(1);
+    expect(worldToScreen(rectCenter(bounds), t)).toEqual({ x: 400, y: 300 });
+  });
+
+  it("stops at minScale for a document too large even for the minimum zoom", () => {
+    const bounds = { x: 0, y: 0, width: 100000, height: 100 };
+    const t = fitTransform(bounds, screen, 40, 1, 0.2);
+    expect(t.scale).toBe(0.2);
+    // Still centred, so the user lands in the middle of the document.
+    expect(worldToScreen(rectCenter(bounds), t)).toEqual({ x: 400, y: 300 });
+  });
+
+  it("handles a zero-size bounds by centring at maxScale", () => {
+    const t = fitTransform({ x: 5, y: 5, width: 0, height: 0 }, screen, 40, 1, 0.2);
+    expect(t.scale).toBe(1);
+    expect(worldToScreen({ x: 5, y: 5 }, t)).toEqual({ x: 400, y: 300 });
   });
 });

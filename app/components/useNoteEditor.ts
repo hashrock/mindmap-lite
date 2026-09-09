@@ -22,13 +22,16 @@ import { guardedStep } from "../application/readOnlyGuard";
 import {
   AUTOSAVE_DELAY_MS,
   beginSave,
+  classifySaveFailure,
   initialSaveTracker,
   isDirty as isTrackerDirty,
+  isRetryableFailure,
   isUntracked,
   nextRetryDelay,
   settleSave,
   untrackedSave,
   type SaveDisplay,
+  type SaveFailureReason,
   type SaveOutcome,
   type SaveTracker,
 } from "../application/saveTracker";
@@ -61,6 +64,23 @@ export type SaveStatusText =
   | "storage-limit"
   | "link-copied"
   | "link-copy-failed";
+
+/**
+ * 失敗理由→説明文のカタログキー。ヘッダーの「保存できませんでした」の横と、
+ * 離脱ダイアログの本文で使う（usertest #3: 理由と対処を必ず示す）。
+ */
+export const SAVE_FAILURE_MESSAGE = {
+  auth: "saveFailedAuth",
+  server: "saveFailedServer",
+  network: "saveFailedNetwork",
+  other: "saveFailedOther",
+} as const satisfies Record<SaveFailureReason, MessageKey>;
+
+/** 離脱ダイアログの本文: 失敗理由（あれば）＋未保存の警告。 */
+export function leaveDialogMessage(reason: SaveFailureReason | null): string {
+  const warning = t("leaveMessage");
+  return reason ? `${t(SAVE_FAILURE_MESSAGE[reason])} ${warning}` : warning;
+}
 
 /** コード→カタログキー。網羅は satisfies で強制（キー追加漏れを防ぐ）。 */
 const SAVE_STATUS_MESSAGE = {
@@ -107,10 +127,19 @@ export interface NoteEditorEngine {
   updateSaveStatus: (status: SaveStatusText) => void;
   saveStatusRef: React.RefObject<HTMLSpanElement | null>;
   /**
+   * 直近の保存が失敗した理由。成功するか、内容が変わって次の保存が走るまで
+   * 残る。ヘッダーはこれで説明文と「再試行」を出す（null = 失敗していない）。
+   */
+  saveFailure: SaveFailureReason | null;
+  /** 今の内容をすぐ保存し直す（自動再試行を待たない）。 */
+  retrySave: () => void;
+  /**
    * 公開ノートの閲覧URLをクリップボードへコピーし、結果をヘッダーの
    * ステータス行に出す。未保存ノート（noteId なし）では何もしない。
    */
   copyPublicLink: () => void;
+  /** 公開ノートの閲覧ページを新しいタブで開く（noteId なしでは何もしない）。 */
+  openPublicPage: () => void;
   isDirty: () => boolean;
   isPublic: boolean;
   setIsPublic: (v: boolean) => void;
@@ -160,6 +189,7 @@ export function useNoteEditor({
 
   const [isPublic, setIsPublic] = useState(initialIsPublic || false);
   const [leaveConfirm, setLeaveConfirm] = useState<LeaveConfirm | null>(null);
+  const [saveFailure, setSaveFailure] = useState<SaveFailureReason | null>(null);
 
   const saveTimerRef = useRef<any>(null);
   // Autosave bookkeeping (baseline + out-of-order acks) — the rules live in
@@ -176,6 +206,9 @@ export function useNoteEditor({
   const bypassNavGuardRef = useRef(false);
   const saveStatusRef = useRef<HTMLSpanElement>(null);
   const undoManagerRef = useRef(new UndoManager());
+  // Mirror of `saveFailure` for the timer / effect closures.
+  const saveFailureRef = useRef<SaveFailureReason | null>(null);
+  saveFailureRef.current = saveFailure;
 
   // --- Central dispatch: state -> action -> newState ---
   // Pure reducer computes the complete next state; a no-op returns the same
@@ -227,6 +260,11 @@ export function useNoteEditor({
     );
   }, [noteId, updateSaveStatus]);
 
+  const openPublicPage = useCallback(() => {
+    if (!noteId) return;
+    window.open(publicNoteUrl(window.location.origin, noteId), "_blank", "noopener");
+  }, [noteId]);
+
   const saveNote = useCallback(
     async (currentModel: MindMapModel, pub?: boolean): Promise<boolean> => {
       if (!noteId || readOnly) return true;
@@ -235,11 +273,14 @@ export function useNoteEditor({
       const seq = saveRef.current.issued;
       updateSaveStatus("saving");
       // 結末の反映は一本化する。追い越された応答が表示を動かさない規則は
-      // saveTracker が持っていて、ここは言われたとおり出すだけ。
+      // saveTracker が持っていて、ここは言われたとおり出すだけ。失敗理由も
+      // 同じ規則に従う（追い越された失敗は理由も出さない）。
       const settle = (outcome: SaveOutcome) => {
         const { tracker, display } = settleSave(saveRef.current, seq, outcome);
         saveRef.current = tracker;
-        if (display) updateSaveStatus(display);
+        if (!display) return;
+        updateSaveStatus(display);
+        setSaveFailure(outcome.ok ? null : (outcome.reason ?? "other"));
       };
       try {
         const res = await fetch(`/api/notes/${noteId}`, {
@@ -252,10 +293,14 @@ export function useNoteEditor({
             isPublic: pub ?? isPublic,
           }),
         });
-        settle(res.ok ? { ok: true, content } : { ok: false });
+        settle(
+          res.ok
+            ? { ok: true, content }
+            : { ok: false, reason: classifySaveFailure(res.status) }
+        );
         return res.ok;
       } catch {
-        settle({ ok: false });
+        settle({ ok: false, reason: classifySaveFailure(null) });
         return false;
       }
     },
@@ -270,23 +315,38 @@ export function useNoteEditor({
     []
   );
 
+  // 手動の再試行: 自動再試行のタイマーを待たず、今の内容を保存し直す。
+  // 失敗が auth（ログイン切れ）だと自動再試行は止まるので、ログインし直した
+  // あとの復帰手段はこれだけ。
+  const retrySave = useCallback(() => {
+    if (!noteId || readOnly) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    void saveNote(modelRef.current);
+  }, [noteId, readOnly, saveNote]);
+
   // Debounced auto-save (with retry-on-failure).
   useEffect(() => {
     if (!noteId || readOnly) return;
     // Don't surface the "unsaved" state as visible text — it's visual noise.
     // Clear the status so the header stays quiet until the save itself flips
-    // this to saving → saved.
-    if (isDirty()) updateSaveStatus("");
+    // this to saving → saved. A standing failure stays visible: the reason and
+    // the retry button must not vanish just because the user kept typing.
+    if (isDirty() && !saveFailureRef.current) updateSaveStatus("");
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     let cancelled = false;
     // A failed autosave used to sit unsaved until the next edit or navigation.
     // Re-arm with exponential backoff (capped) so a transient failure recovers
     // on its own; stop once the save lands or the model changes (this effect
-    // re-runs and resets the chain).
+    // re-runs and resets the chain). A failure that can't heal by itself
+    // (auth / rejected content) is not retried on a timer — it would only
+    // pile up identical errors — the header offers a manual retry instead.
     const arm = (delay: number) => {
       saveTimerRef.current = setTimeout(async () => {
         const ok = await saveNote(modelRef.current);
-        if (!cancelled && !ok && isDirty()) arm(nextRetryDelay(delay));
+        if (cancelled || ok || !isDirty()) return;
+        const reason = saveFailureRef.current;
+        if (reason && !isRetryableFailure(reason)) return;
+        arm(nextRetryDelay(delay));
       }, delay);
     };
     arm(AUTOSAVE_DELAY_MS);
@@ -394,7 +454,10 @@ export function useNoteEditor({
     saveNote,
     updateSaveStatus,
     saveStatusRef,
+    saveFailure,
+    retrySave,
     copyPublicLink,
+    openPublicPage,
     isDirty,
     isPublic,
     setIsPublic,

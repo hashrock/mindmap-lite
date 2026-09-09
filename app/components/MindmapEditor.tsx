@@ -4,6 +4,7 @@ import {
   useRef,
   useCallback,
   useMemo,
+  useSyncExternalStore,
   lazy,
   Suspense,
 } from "react";
@@ -33,9 +34,14 @@ import {
   stageTransform,
   applyStageTransform,
 } from "./stagePanZoom";
-import { zoomAt, panBy } from "../lib/panZoom";
+import { zoomAt, panBy, MIN_SCALE } from "../lib/panZoom";
 import { edgeScrollVelocity } from "../lib/dragAutoScroll";
-import { useNoteEditor, type NoteEditorEngine } from "./useNoteEditor";
+import {
+  useNoteEditor,
+  leaveDialogMessage,
+  type NoteEditorEngine,
+} from "./useNoteEditor";
+import SaveStatus from "./SaveStatus";
 import { useTextInputHandlers } from "./useTextInputHandlers";
 import { layoutMindMap, VERTICAL_GAP } from "../lib/treeLayout";
 import {
@@ -53,7 +59,12 @@ import {
   verticalMove,
   type LineData,
 } from "../lib/textGeometry";
-import { subscribeImages, imageDisplaySize, getImageEntry } from "../lib/imageCache";
+import {
+  subscribeImages,
+  imageCacheVersion,
+  imageDisplaySize,
+  getImageEntry,
+} from "../lib/imageCache";
 import {
   flattenToNodes,
   nodeDisplayText,
@@ -80,6 +91,8 @@ import {
   worldViewport,
   centerOffset,
   ensureVisibleOffset,
+  fitTransform,
+  unionRect,
   type Vec,
   type ViewTransform,
 } from "../lib/viewport";
@@ -165,6 +178,10 @@ const HIDDEN_NODE_TYPES: ReadonlySet<NodeType> = new Set();
 // Zoom factor per click of the floating +/− buttons. Deliberately coarser than
 // WHEEL_ZOOM_STEP (1.05): a button click should make a visible jump.
 const ZOOM_BUTTON_STEP = 1.2;
+/** Screen-space margin kept around the document by 全体表示 (fit-all). */
+const FIT_PADDING = 40;
+/** Width of the markdown side panel (MarkdownPanel's `max-w-[420px]`). */
+const MD_PANEL_MAX_WIDTH = 420;
 
 // Each connector leaves its parent with a short straight stub before the curve
 // begins. The stub's end is the shared junction where all of a parent's edges
@@ -393,7 +410,10 @@ export function MindmapEditorView({
     saveNote,
     updateSaveStatus,
     saveStatusRef,
+    saveFailure,
+    retrySave,
     copyPublicLink,
+    openPublicPage,
     undoManagerRef,
     undo,
     redo,
@@ -454,6 +474,8 @@ export function MindmapEditorView({
   // The markdown node whose full document is open in the side panel (null =
   // closed). Markdown nodes edit/preview here rather than expanding on-canvas.
   const [mdPanelNodeId, setMdPanelNodeId] = useState<string | null>(null);
+  const mdPanelNodeIdRef = useRef<string | null>(null);
+  mdPanelNodeIdRef.current = mdPanelNodeId;
   // True while the markdown panel's textarea owns the keyboard. Same role as
   // `urlEditing` for the URL box: it marks an editing surface outside the
   // canvas, so the focus-sync effects below must leave the focus alone.
@@ -634,12 +656,13 @@ export function MindmapEditorView({
   const commitPlaceRef = useRef(commitPlace);
   commitPlaceRef.current = commitPlace;
 
-  // Re-render when an image-node's image finishes loading (size becomes known).
-  const [imageVersion, setImageVersion] = useState(0);
-  useEffect(
-    () => subscribeImages(() => setImageVersion((v) => v + 1)),
-    []
-  );
+  // Re-render (and re-lay-out) when an image-node's image finishes loading
+  // (size becomes known). Read as an external-store snapshot rather than a
+  // subscribe-in-effect counter: the first layout starts the load during
+  // render, and a fast (data: URL) image can finish before the effect would
+  // have subscribed — the box then kept its placeholder width until an
+  // unrelated edit re-laid the tree out (usertest #8).
+  const imageVersion = useSyncExternalStore(subscribeImages, imageCacheVersion, () => 0);
 
   // Derived: flat nodes with layout. Only while a caret is active on a TEXT
   // node is it sized from the live buffer. Image/link nodes keep their real
@@ -1219,6 +1242,24 @@ export function MindmapEditorView({
           focusEditorSoon();
         },
       });
+      // Same as Enter in selection mode (a tree root gets a child instead —
+      // see addSiblingAfter). Offered here for users who don't know the key
+      // (usertest #10). Hidden on tree roots where it would duplicate
+      // "add child".
+      if (!isTopLevel(modelRef.current, nodeId)) {
+        structureGroup.push({
+          label: t("menuAddSibling"),
+          onSelect: () => {
+            const next = dispatch(
+              { type: "insertSiblingAfter", nodeId },
+              "insert-sibling"
+            );
+            if (next.view.activeNodeId) flashNodes([next.view.activeNodeId]);
+            if (noteId) saveNote(next.document.model);
+            focusEditorSoon();
+          },
+        });
+      }
     }
     if (hasChildren) {
       structureGroup.push({
@@ -1404,6 +1445,14 @@ export function MindmapEditorView({
       // ignore the rest.
       if (helpOpen || settingsOpen) return;
       const state = stateRef.current;
+      // The markdown side panel: Escape on the canvas closes it (the panel's
+      // own Escape closes it too). Selection mode has no Escape binding of
+      // its own (see editorKeymap), so nothing is shadowed.
+      if (e.key === "Escape" && !state.view.editing && mdPanelNodeIdRef.current) {
+        e.preventDefault();
+        setMdPanelNodeId(null);
+        return;
+      }
       const outcome = runKeymap(
         keymap,
         {
@@ -1522,7 +1571,7 @@ export function MindmapEditorView({
         );
         const firstLine = node.text.split("\n")[0];
         const label = !firstLine
-          ? "empty"
+          ? t("nodeEmptyPlaceholder")
           : firstLine.length > 24
             ? firstLine.slice(0, 24) + "…"
             : firstLine;
@@ -2092,6 +2141,38 @@ export function MindmapEditorView({
     setZoomPercent(Math.round(t.scale * 100));
   }, []);
 
+  // Apply a whole transform (zoom + pan) from the view controls.
+  const applyView = useCallback((t: ViewTransform) => {
+    const stage = konvaStageRef.current;
+    if (!stage) return;
+    applyStageTransform(stage, t);
+    layerRef.current?.batchDraw();
+    updateGridRef.current();
+    setViewportTick((tick) => tick + 1);
+    setZoomPercent(Math.round(t.scale * 100));
+  }, []);
+
+  // 全体表示: every tree of the document inside the viewport (usertest #1/#2 —
+  // a user who panned the trees off-screen, or doesn't know there are more
+  // trees below the first, needs one button that shows everything).
+  const fitToView = useCallback(() => {
+    const stage = konvaStageRef.current;
+    if (!stage) return;
+    const bounds = unionRect(
+      nodesRef.current.map((n) => nodeRect(n, n.depth === 0))
+    );
+    if (!bounds) return;
+    applyView(
+      fitTransform(
+        bounds,
+        { width: stage.width(), height: stage.height() },
+        FIT_PADDING,
+        1,
+        MIN_SCALE
+      )
+    );
+  }, [applyView]);
+
   // Stable object so the memoized ViewControls skips re-rendering on the
   // per-wheel-tick renders this view does during pan/zoom gestures.
   const zoomControls = useMemo(
@@ -2099,13 +2180,52 @@ export function MindmapEditorView({
       percent: zoomPercent,
       onZoomIn: () => zoomBy(ZOOM_BUTTON_STEP),
       onZoomOut: () => zoomBy(1 / ZOOM_BUTTON_STEP),
+      // "100%" resets the zoom AND brings the selected node back to the
+      // centre — resetting the scale alone left a user who had panned away
+      // staring at an empty canvas (usertest #1).
       onReset: () => {
         const stage = konvaStageRef.current;
-        if (stage) zoomBy(1 / stage.scaleX());
+        if (!stage) return;
+        const flat = nodesRef.current;
+        const activeId = stateRef.current.view.activeNodeId;
+        const target = flat.find((n) => n.id === activeId) ?? flat[0];
+        if (!target) {
+          zoomBy(1 / stage.scaleX());
+          return;
+        }
+        const rect = nodeRect(target, target.depth === 0);
+        const { offsetX, offsetY } = centerOffset(rectCenter(rect), 1, {
+          width: stage.width(),
+          height: stage.height(),
+        });
+        applyView({ scale: 1, offsetX, offsetY });
       },
+      onFit: fitToView,
     }),
-    [zoomPercent, zoomBy]
+    [zoomPercent, zoomBy, applyView, fitToView, stateRef]
   );
+
+  // When the markdown side panel opens it covers the right part of the
+  // canvas — exactly where the (rightmost, leaf) markdown node usually sits.
+  // Pan just enough that the node stays visible in the uncovered area
+  // (usertest #4).
+  useEffect(() => {
+    const stage = konvaStageRef.current;
+    if (!stage || !mdPanelNodeId) return;
+    const node = nodesRef.current.find((n) => n.id === mdPanelNodeId);
+    if (!node) return;
+    const panelWidth = Math.min(MD_PANEL_MAX_WIDTH, stage.width());
+    const visibleWidth = stage.width() - panelWidth;
+    if (visibleWidth <= 0) return;
+    const { offsetX, offsetY, changed } = ensureVisibleOffset(
+      nodeRect(node, node.depth === 0),
+      stageTransform(stage),
+      { width: visibleWidth, height: stage.height() },
+      50
+    );
+    if (!changed) return;
+    applyView({ scale: stage.scaleX(), offsetX, offsetY });
+  }, [mdPanelNodeId, applyView]);
 
   // Re-centre when the note changes (a fresh document should open centred too).
   useEffect(() => {
@@ -2311,7 +2431,9 @@ export function MindmapEditorView({
         : node.width;
       textWidths.set(
         node.id,
-        displayRaw === "" ? Math.max(measured, measureEmptyWidth()) : measured
+        displayRaw === ""
+          ? Math.max(measured, measureEmptyWidth(t("nodeEmptyPlaceholder")))
+          : measured
       );
     });
     lineDataRef.current = lineDataMap;
@@ -2398,7 +2520,7 @@ export function MindmapEditorView({
       // Draw the VISUAL lines the box was measured from (hard breaks + soft
       // wraps at the width cap), pre-joined at wrap time so Konva does no
       // wrapping of its own — text, box and caret agree by construction.
-      const drawnText = isEmpty ? "empty" : data.visualText;
+      const drawnText = isEmpty ? t("nodeEmptyPlaceholder") : data.visualText;
       // Favicon only when a non-active link node has one.
       const favEntry =
         asLink && node.favicon ? getImageEntry(node.favicon) : undefined;
@@ -3441,7 +3563,7 @@ export function MindmapEditorView({
         open={leaveConfirm !== null}
         variant="danger"
         title={t("saveFailedTitle")}
-        message={t("leaveMessage")}
+        message={leaveDialogMessage(saveFailure)}
         confirmLabel={t("leaveConfirm")}
         cancelLabel={t("leaveCancel")}
         onConfirm={() => {
@@ -3511,7 +3633,7 @@ export function MindmapEditorView({
             </button>
           )}
         </div>
-        <div className="flex items-center gap-3 text-xs">
+        <div className="flex items-center gap-2 text-xs md:gap-3">
           <ViewControls
             layout={layout ?? "canvas"}
             onLayoutChange={onLayoutChange}
@@ -3519,15 +3641,19 @@ export function MindmapEditorView({
           />
           {noteId && !readOnly && (
             <>
-              <span
-                ref={saveStatusRef}
-                data-testid="save-status"
-                className="whitespace-nowrap text-slate-500"
+              <SaveStatus
+                statusRef={saveStatusRef}
+                failure={saveFailure}
+                onRetry={retrySave}
               />
-              <MultiRootToggle
-                multiRoot={isMultiRoot(model)}
-                onChange={multiRootOnChange(dispatch, saveNote)}
-              />
+              {/* The multi-tree switch governs a canvas-only gesture (right-click on
+                  empty canvas); on a phone-width header it has no room and no use. */}
+              <span className="hidden md:inline-flex">
+                <MultiRootToggle
+                  multiRoot={isMultiRoot(model)}
+                  onChange={multiRootOnChange(dispatch, saveNote)}
+                />
+              </span>
               <PublicityDropdown
                 isPublic={isPublic}
                 onChange={(next) => {
@@ -3535,6 +3661,7 @@ export function MindmapEditorView({
                   saveNote(model, next);
                 }}
                 onCopyLink={copyPublicLink}
+                onOpenPublicPage={openPublicPage}
               />
             </>
           )}

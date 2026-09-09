@@ -19,13 +19,16 @@ import {
   AUTOSAVE_DELAY_MS,
   AUTOSAVE_MAX_DELAY_MS,
   beginSave,
+  classifySaveFailure,
   initialSaveTracker,
   isDirty,
+  isRetryableFailure,
   isUntracked,
   nextRetryDelay,
   settleSave,
   untrackedSave,
   type SaveDisplay,
+  type SaveFailureReason,
 } from "./saveTracker";
 
 /**
@@ -211,6 +214,40 @@ describe("autosave retry backoff", () => {
         }
         // 伸び続けはしない: 数回で必ず上限に落ち着く。
         if (retries >= 4) expect(delay).toBe(AUTOSAVE_MAX_DELAY_MS);
+      })
+    );
+  });
+});
+
+describe("classifySaveFailure (usertest #3: why did the save fail?)", () => {
+  it("maps HTTP status / network failure to a reason", () => {
+    expect(classifySaveFailure(null)).toBe("network");
+    expect(classifySaveFailure(401)).toBe("auth");
+    expect(classifySaveFailure(403)).toBe("auth");
+    expect(classifySaveFailure(404)).toBe("auth");
+    expect(classifySaveFailure(500)).toBe("server");
+    expect(classifySaveFailure(503)).toBe("server");
+    expect(classifySaveFailure(400)).toBe("other");
+    expect(classifySaveFailure(413)).toBe("other");
+  });
+
+  it("only server/network failures are worth retrying on a timer", () => {
+    fc.assert(
+      fc.property(fc.option(fc.integer({ min: 100, max: 599 }), { nil: null }), (status) => {
+        const reason = classifySaveFailure(status);
+        expect(isRetryableFailure(reason)).toBe(reason === "server" || reason === "network");
+      })
+    );
+  });
+
+  it("a failure's reason rides along with the outcome but never changes the tracker rules", () => {
+    fc.assert(
+      fc.property(fc.constantFrom("auth", "server", "network", "other") as fc.Arbitrary<SaveFailureReason>, (reason) => {
+        const t0 = beginSave(initialSaveTracker("a"));
+        const withReason = settleSave(t0, 1, { ok: false, reason });
+        const without = settleSave(t0, 1, { ok: false });
+        expect(withReason).toEqual(without);
+        expect(withReason.display).toBe("save-failed");
       })
     );
   });
